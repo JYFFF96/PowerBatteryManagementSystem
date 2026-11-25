@@ -7,12 +7,12 @@ CONFIG -= app_bundle
 
 SOURCES += \
     src/main.cpp \
-    src/mainwindow.cpp \
+    src/dashboardwindow.cpp \
     src/bmsprotocol.cpp \
     src/canadapter.cpp
 
 HEADERS += \
-    src/mainwindow.h \
+    src/dashboardwindow.h \
     src/bmsprotocol.h \
     src/canadapter.h
 
