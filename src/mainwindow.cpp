@@ -1,6 +1,8 @@
 #include "mainwindow.h"
 
 #include <QApplication>
+#include <QComboBox>
+#include <QSpinBox>
 #include <QDateTime>
 #include <QFile>
 #include <QFileDialog>
@@ -42,11 +44,16 @@ QLabel *makeMetric(const QString &name, QGridLayout *grid, int index,
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
     buildUi();
+    adapter_ = new CanAdapter(this);
+    connect(adapter_, &CanAdapter::framesReceived, this,
+            [this](const QVector<CanFrame> &frames) { processCanFrames(frames); });
+    connect(canButton_, &QPushButton::clicked, this, [this] { toggleCan(); });
     timer_ = new QTimer(this);
     timer_->setInterval(1000);
 
     connect(timer_, &QTimer::timeout, this, [this] { refreshDemo(); });
     connect(startButton_, &QPushButton::clicked, this, [this] {
+        if (liveMode_) return;
         timer_->start();
         startButton_->setEnabled(false);
         stopButton_->setEnabled(true);
@@ -107,6 +114,16 @@ void MainWindow::buildUi()
     header->addSpacing(15);
     header->addWidget(connectionLabel_);
     header->addStretch();
+    channelBox_ = new QComboBox;
+    channelBox_->addItems({QStringLiteral("CAN0"), QStringLiteral("CAN1")});
+    deviceIndexBox_ = new QSpinBox;
+    deviceIndexBox_->setRange(0, 15);
+    deviceIndexBox_->setToolTip(QStringLiteral("CAN设备索引，通常为0"));
+    canButton_ = new QPushButton(QStringLiteral("连接 CAN"));
+    header->addWidget(new QLabel(QStringLiteral("设备索引")));
+    header->addWidget(deviceIndexBox_);
+    header->addWidget(channelBox_);
+    header->addWidget(canButton_);
     header->addWidget(startButton_);
     header->addWidget(stopButton_);
     header->addWidget(exportButton);
@@ -129,7 +146,7 @@ void MainWindow::buildUi()
     auto *splitter = new QSplitter(Qt::Horizontal);
     auto *cellGroup = new QGroupBox(QStringLiteral("单体电池电压监控（24 节）"));
     auto *cellLayout = new QVBoxLayout(cellGroup);
-    cellTable_ = new QTableWidget(24, 3);
+    cellTable_ = new QTableWidget(192, 3);
     cellTable_->setHorizontalHeaderLabels({
         QStringLiteral("单体编号"), QStringLiteral("电压 (V)"), QStringLiteral("状态")
     });
@@ -144,7 +161,7 @@ void MainWindow::buildUi()
     rightLayout->setContentsMargins(0, 0, 0, 0);
     auto *temperatureGroup = new QGroupBox(QStringLiteral("温度监控（6 路）"));
     auto *temperatureLayout = new QVBoxLayout(temperatureGroup);
-    temperatureTable_ = new QTableWidget(6, 3);
+    temperatureTable_ = new QTableWidget(64, 3);
     temperatureTable_->setHorizontalHeaderLabels({
         QStringLiteral("探头"), QStringLiteral("温度 (°C)"), QStringLiteral("状态")
     });
@@ -195,12 +212,15 @@ void MainWindow::setTableRow(QTableWidget *table, int row,
 
 void MainWindow::refreshDemo()
 {
+    if (liveMode_) return;
     ++sampleIndex_;
     const double soc = std::max(0.0, 78.6 - sampleIndex_ * 0.005);
     const double current = -24.8 + std::sin(sampleIndex_ * 0.15) * 3.0;
     double minCell = 100.0, maxCell = 0.0, maxTemp = -100.0;
     voltages_.clear();
 
+    cellTable_->setRowCount(24);
+    temperatureTable_->setRowCount(6);
     for (int i = 0; i < 24; ++i) {
         const double v = 3.61 + std::sin(sampleIndex_ * 0.09 + i * 0.7) * 0.025;
         voltages_.append(v);
@@ -286,4 +306,92 @@ void MainWindow::exportCsv()
     }
     file.close();
     appendLog(QStringLiteral("已导出单体电压 CSV：") + path);
+}
+
+void MainWindow::toggleCan()
+{
+    if (adapter_->connected()) {
+        adapter_->close();
+        liveMode_ = false;
+        canButton_->setText(QStringLiteral("连接 CAN"));
+        channelBox_->setEnabled(true);
+        deviceIndexBox_->setEnabled(true);
+        connectionLabel_->setText(QStringLiteral("● CAN 已断开"));
+        startButton_->setEnabled(true);
+        appendLog(QStringLiteral("已断开 CAN 设备，可启动模拟模式"));
+        return;
+    }
+    timer_->stop();
+    protocol_.reset();
+    QString error;
+    if (!adapter_->open(4, deviceIndexBox_->value(), channelBox_->currentIndex(), &error)) {
+        QMessageBox::warning(this, QStringLiteral("CAN 连接失败"),
+                             error + QStringLiteral("\n请将 mmWaveRadar/libs/ControlCAN.dll 复制到本程序 EXE 同目录，检查驱动及设备。"));
+        startButton_->setEnabled(true);
+        stopButton_->setEnabled(false);
+        return;
+    }
+    liveMode_ = true;
+    startButton_->setEnabled(false);
+    stopButton_->setEnabled(false);
+    canButton_->setText(QStringLiteral("断开 CAN"));
+    channelBox_->setEnabled(false);
+    deviceIndexBox_->setEnabled(false);
+    connectionLabel_->setText(QStringLiteral("● CAN 已连接 | 250 kbps"));
+    appendLog(QStringLiteral("CAN 设备打开成功，等待 TKB BMS 扩展帧"));
+}
+
+void MainWindow::processCanFrames(const QVector<CanFrame> &frames)
+{
+    if (!liveMode_) return;
+    int accepted = 0;
+    for (const CanFrame &frame : frames)
+        accepted += protocol_.parse(frame) ? 1 : 0;
+    if (accepted)
+        applyBmsState();
+}
+
+void MainWindow::applyBmsState()
+{
+    const auto &s = protocol_.state();
+    const auto show = [this](int index, const QString &value) {
+        metrics_[index]->setText(value);
+    };
+    show(0, s.hasStatus ? QString::number(s.soc) + QStringLiteral(" %") : QStringLiteral("--"));
+    show(1, s.hasStatus ? QString::number(s.soh) + QStringLiteral(" %") : QStringLiteral("--"));
+    show(2, s.hasSummary ? QString::number(s.packVoltage, 'f', 1) + QStringLiteral(" V") : QStringLiteral("--"));
+    // Current signedness is not specified in the abridged vendor protocol.
+    show(3, s.hasStatus ? QString::number(s.currentRawAmps, 'f', 1) + QStringLiteral(" A (raw)") : QStringLiteral("--"));
+    show(4, QStringLiteral("待确认电流符号"));
+    show(5, s.hasTempExtremes ? QString::number(s.maxTemperature) + QStringLiteral(" °C") : QStringLiteral("--"));
+    show(6, s.hasCellExtremes ? QString::number(s.minCellVoltage, 'f', 3) + QStringLiteral(" V") : QStringLiteral("--"));
+    show(7, s.hasCellExtremes ? QString::number((s.maxCellVoltage - s.minCellVoltage) * 1000, 'f', 0) + QStringLiteral(" mV") : QStringLiteral("--"));
+
+    const int cellCount = s.hasSummary ? s.cellCount : 192;
+    const int tempCount = s.hasSummary ? s.temperatureCount : 64;
+    cellTable_->setRowCount(cellCount);
+    temperatureTable_->setRowCount(tempCount);
+    for (int i = 0; i < cellCount; ++i) {
+        const double v = s.cells.at(i);
+        setTableRow(cellTable_, i, {
+            QStringLiteral("Cell %1").arg(i + 1, 3, 10, QChar('0')),
+            v < 0 ? QStringLiteral("--") : QString::number(v, 'f', 3),
+            v < 0 ? QStringLiteral("未收到") : QStringLiteral("已接收")
+        });
+    }
+    for (int i = 0; i < tempCount; ++i) {
+        const int t = s.temperatures.at(i);
+        setTableRow(temperatureTable_, i, {
+            QStringLiteral("T%1").arg(i + 1),
+            t == -999 ? QStringLiteral("--") : QString::number(t),
+            t == -999 ? QStringLiteral("未收到") : QStringLiteral("已接收")
+        });
+    }
+    if (!s.hasFaultFrame)
+        alarmLabel_->setText(QStringLiteral("等待故障状态帧 0x02058100"));
+    else
+        alarmLabel_->setText(s.faults.isEmpty() ? QStringLiteral("无已报告故障") : s.faults.join(QStringLiteral("；")));
+    alarmLabel_->setStyleSheet(s.faults.isEmpty()
+        ? QStringLiteral("color:#389e0d;") : QStringLiteral("color:#cf1322;font-weight:bold;"));
+    statusBar()->showMessage(QStringLiteral("真实 CAN 接收模式 | 当前为只读监控 | 故障阈值和电流符号待厂商确认"));
 }
