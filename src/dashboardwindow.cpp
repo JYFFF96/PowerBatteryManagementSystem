@@ -526,6 +526,7 @@ void DashboardWindow::toggleCan() {
         updateConnectionText();refreshUi();return;
     }
     stopDemo();
+    protocol_.reset();data_=BmsState{};refreshUi();
     QString error;
     if(!can_->open(adapterBox_->currentData().toInt(),deviceIndex_->value(),channelBox_->currentIndex(),&error)) {
         QMessageBox::warning(this,QStringLiteral("CAN 连接失败"),error+
@@ -539,6 +540,7 @@ void DashboardWindow::toggleCan() {
 }
 void DashboardWindow::startDemo() {
     if(can_->connected()) return;
+    protocol_.reset();data_=BmsState{};lastReceiveMs_=-1;
     demo_=true;demoStep_=0;demoTimer_->start();
     demoButton_->setText(QStringLiteral("停止模拟"));
     updateConnectionText();demoTick();
@@ -567,32 +569,52 @@ void DashboardWindow::updateConnectionText() {
 void DashboardWindow::demoTick() {
     if(!demo_)return;
     ++demoStep_;
-    data_=BmsState{};
-    data_.cellCount=cellCount_->value();data_.temperatureCount=tempCount_->value();
-    data_.hasSummary=data_.hasStatus=data_.hasCellExtremes=data_.hasTempExtremes=data_.hasFaultFrame=true;
-    data_.soc=qBound(0,79-demoStep_/60,100);data_.soh=96;data_.chargeState=2;
-    data_.currentRawAmps=26+4*std::sin(demoStep_*0.07);
-    double sum=0;double maxV=-1,minV=100;
-    int maxIdx=0,minIdx=0;
-    for(int i=0;i<data_.cellCount;++i){
-        double v=3.20+0.05*std::sin(demoStep_*0.08+i*0.32)+0.008*std::cos(i*0.9);
-        data_.cells[i]=v;sum+=v;
-        if(v>maxV){maxV=v;maxIdx=i;}
-        if(v<minV){minV=v;minIdx=i;}
+    const int count=cellCount_->value(), tempCount=tempCount_->value();
+    QVector<int> voltages; int sumMv=0,maxMv=0,minMv=65535,maxIdx=0,minIdx=0;
+    for(int i=0;i<count;++i) {
+        const int mv=qRound(3200+50*std::sin(demoStep_*0.08+i*0.32)+8*std::cos(i*0.9));
+        voltages<<mv;sumMv+=mv;
+        if(mv>maxMv){maxMv=mv;maxIdx=i;}
+        if(mv<minMv){minMv=mv;minIdx=i;}
     }
-    data_.packVoltage=sum;data_.maxCellVoltage=maxV;data_.minCellVoltage=minV;
-    data_.maxCellIndex=maxIdx+1;data_.minCellIndex=minIdx+1;
-    data_.maxCellModule=data_.minCellModule=1;
-    int maxT=-100,minT=100;
-    for(int i=0;i<data_.temperatureCount;++i) {
-        int t=int(qRound(27+3*std::sin(demoStep_*0.06+i)));
-        data_.temperatures[i]=t;maxT=qMax(maxT,t);minT=qMin(minT,t);
+    QVector<int> temperatures;
+    int maxT=-100,minT=100,maxTi=0,minTi=0;
+    for(int i=0;i<tempCount;++i){
+        const int t=qRound(27+3*std::sin(demoStep_*0.06+i));
+        temperatures<<t;
+        if(t>maxT){maxT=t;maxTi=i;}
+        if(t<minT){minT=t;minTi=i;}
     }
-    data_.maxTemperature=maxT;data_.minTemperature=minT;
-    data_.faults.clear();
+    auto make=[this](int fid,QByteArray d){
+        CanFrame f;f.id=0x02008100u|(quint32(fid)<<16);f.extended=true;f.data=d;
+        ++receiveCount_;addFrame(f.id,f.data,QStringLiteral("SIM"));
+        protocol_.parse(f);
+    };
+    auto set16=[](QByteArray &d,int offset,int value){
+        d[offset]=char((value>>8)&255);d[offset+1]=char(value&255);
+    };
+    QByteArray d(8,char(0));
+    d[0]=char(count);d[1]=char(tempCount);set16(d,2,qRound(sumMv/100.0));make(0x01,d);
+    d.fill(char(0));set16(d,0,qRound(260+40*std::sin(demoStep_*0.07)));
+    d[2]=char(2);d[3]=char(qBound(0,79-demoStep_/60,100));d[4]=char(96);make(0x02,d);
+    d.fill(char(0));set16(d,0,maxMv);d[2]=char(1);d[3]=char(maxIdx+1);
+    set16(d,4,minMv);d[6]=char(1);d[7]=char(minIdx+1);make(0x03,d);
+    d.fill(char(0));d[0]=char(maxT+50);d[1]=char(1);d[2]=char(maxTi+1);
+    d[3]=char(minT+50);d[4]=char(1);d[5]=char(minTi+1);make(0x04,d);
+    d.fill(char(0));make(0x05,d);
+    for(int i=0;i<count;i+=4){
+        d.fill(char(0));
+        for(int j=0;j<4&&i+j<count;++j)set16(d,2*j,voltages[i+j]);
+        make(0x10+i/4,d);
+    }
+    for(int i=0;i<tempCount;i+=8){
+        d.fill(char(0));
+        for(int j=0;j<8&&i+j<tempCount;++j)d[j]=char(temperatures[i+j]+50);
+        make(0x46+i/8,d);
+    }
+    data_=protocol_.state();
     appendSample();refreshUi();
 }
-
 void DashboardWindow::consumeFrames(const QVector<CanFrame> &frames) {
     if(!can_->connected())return;
     bool changed=false;
