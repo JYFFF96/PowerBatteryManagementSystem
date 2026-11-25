@@ -11,6 +11,10 @@ qt_add_executable(PowerBatteryManagementSystem
     src/main.cpp
     src/mainwindow.h
     src/mainwindow.cpp
+    src/bmsprotocol.h
+    src/bmsprotocol.cpp
+    src/canadapter.h
+    src/canadapter.cpp
 )
 
 target_link_libraries(PowerBatteryManagementSystem PRIVATE Qt6::Widgets)
