@@ -144,7 +144,7 @@ void MainWindow::buildUi()
     layout->addWidget(overview);
 
     auto *splitter = new QSplitter(Qt::Horizontal);
-    auto *cellGroup = new QGroupBox(QStringLiteral("单体电池电压监控（24 节）"));
+    auto *cellGroup = new QGroupBox(QStringLiteral("单体电池电压监控（最多 192 节）"));
     auto *cellLayout = new QVBoxLayout(cellGroup);
     cellTable_ = new QTableWidget(192, 3);
     cellTable_->setHorizontalHeaderLabels({
@@ -159,7 +159,7 @@ void MainWindow::buildUi()
     auto *right = new QWidget;
     auto *rightLayout = new QVBoxLayout(right);
     rightLayout->setContentsMargins(0, 0, 0, 0);
-    auto *temperatureGroup = new QGroupBox(QStringLiteral("温度监控（6 路）"));
+    auto *temperatureGroup = new QGroupBox(QStringLiteral("温度监控（最多 64 路）"));
     auto *temperatureLayout = new QVBoxLayout(temperatureGroup);
     temperatureTable_ = new QTableWidget(64, 3);
     temperatureTable_->setHorizontalHeaderLabels({
