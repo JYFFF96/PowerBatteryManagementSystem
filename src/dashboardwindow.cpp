@@ -15,6 +15,9 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPainter>
+#include <QPainterPath>
+#include <QStyle>
+#include <QStringConverter>
 #include <QPaintEvent>
 #include <QPushButton>
 #include <QScrollArea>
@@ -514,3 +517,278 @@ QWidget *DashboardWindow::createSettings() {
     });
     return page(w);
 }
+
+void DashboardWindow::toggleCan() {
+    if(can_->connected()) {
+        can_->close();protocol_.reset();data_=BmsState{};lastReceiveMs_=-1;
+        connectButton_->setText(QStringLiteral("连接 CAN"));
+        adapterBox_->setEnabled(true);channelBox_->setEnabled(true);deviceIndex_->setEnabled(true);
+        updateConnectionText();refreshUi();return;
+    }
+    stopDemo();
+    QString error;
+    if(!can_->open(adapterBox_->currentData().toInt(),deviceIndex_->value(),channelBox_->currentIndex(),&error)) {
+        QMessageBox::warning(this,QStringLiteral("CAN 连接失败"),error+
+            QStringLiteral("\n确认同目录有对应架构的 ControlCAN.dll，并已安装驱动。"));
+        updateConnectionText();return;
+    }
+    protocol_.reset();data_=BmsState{};lastReceiveMs_=-1;
+    connectButton_->setText(QStringLiteral("断开 CAN"));
+    adapterBox_->setEnabled(false);channelBox_->setEnabled(false);deviceIndex_->setEnabled(false);
+    updateConnectionText();refreshUi();
+}
+void DashboardWindow::startDemo() {
+    if(can_->connected()) return;
+    demo_=true;demoStep_=0;demoTimer_->start();
+    demoButton_->setText(QStringLiteral("停止模拟"));
+    updateConnectionText();demoTick();
+}
+void DashboardWindow::stopDemo() {
+    demo_=false;demoTimer_->stop();
+    if(demoButton_)demoButton_->setText(QStringLiteral("启动模拟"));
+    updateConnectionText();
+}
+void DashboardWindow::updateConnectionText() {
+    if(can_&&can_->connected()) {
+        const bool fresh=lastReceiveMs_>=0 && clock_.elapsed()-lastReceiveMs_<2500;
+        connection_->setText(fresh?QStringLiteral("● 正在接收"):QStringLiteral("● 已连接 · 等待报文"));
+        connection_->setStyleSheet(fresh?"color:#55cd90;":"color:#f5be43;");
+        demoButton_->setEnabled(false);
+    }else if(demo_) {
+        connection_->setText(QStringLiteral("● 模拟运行"));
+        connection_->setStyleSheet("color:#5ab5ff;");
+        demoButton_->setEnabled(true);
+    }else {
+        connection_->setText(QStringLiteral("● 未连接"));
+        connection_->setStyleSheet("color:#8fa1b8;");
+        demoButton_->setEnabled(true);
+    }
+}
+void DashboardWindow::demoTick() {
+    if(!demo_)return;
+    ++demoStep_;
+    data_=BmsState{};
+    data_.cellCount=cellCount_->value();data_.temperatureCount=tempCount_->value();
+    data_.hasSummary=data_.hasStatus=data_.hasCellExtremes=data_.hasTempExtremes=data_.hasFaultFrame=true;
+    data_.soc=qBound(0,79-demoStep_/60,100);data_.soh=96;data_.chargeState=2;
+    data_.currentRawAmps=26+4*std::sin(demoStep_*0.07);
+    double sum=0;double maxV=-1,minV=100;
+    int maxIdx=0,minIdx=0;
+    for(int i=0;i<data_.cellCount;++i){
+        double v=3.20+0.05*std::sin(demoStep_*0.08+i*0.32)+0.008*std::cos(i*0.9);
+        data_.cells[i]=v;sum+=v;
+        if(v>maxV){maxV=v;maxIdx=i;}
+        if(v<minV){minV=v;minIdx=i;}
+    }
+    data_.packVoltage=sum;data_.maxCellVoltage=maxV;data_.minCellVoltage=minV;
+    data_.maxCellIndex=maxIdx+1;data_.minCellIndex=minIdx+1;
+    data_.maxCellModule=data_.minCellModule=1;
+    int maxT=-100,minT=100;
+    for(int i=0;i<data_.temperatureCount;++i) {
+        int t=int(qRound(27+3*std::sin(demoStep_*0.06+i)));
+        data_.temperatures[i]=t;maxT=qMax(maxT,t);minT=qMin(minT,t);
+    }
+    data_.maxTemperature=maxT;data_.minTemperature=minT;
+    data_.faults.clear();
+    appendSample();refreshUi();
+}
+
+void DashboardWindow::consumeFrames(const QVector<CanFrame> &frames) {
+    if(!can_->connected())return;
+    bool changed=false;
+    for(const auto &frame:frames) {
+        ++receiveCount_;
+        addFrame(frame.id,frame.data,QStringLiteral("RX"));
+        changed=protocol_.parse(frame)||changed;
+    }
+    if(changed) {
+        data_=protocol_.state();
+        lastReceiveMs_=clock_.elapsed();
+        appendSample();
+        refreshUi();
+    }
+}
+void DashboardWindow::addFrame(quint32 id,const QByteArray &raw,const QString &direction) {
+    const QStringList record={QDateTime::currentDateTime().toString("HH:mm:ss.zzz"),direction,
+        canId(id),bytes(raw),classify(id)};
+    auto addRow=[&](QTableWidget *t,int limit){
+        if(!t)return;
+        const int r=t->rowCount();t->insertRow(r);
+        for(int col=0;col<record.size();++col)t->setItem(r,col,new QTableWidgetItem(record[col]));
+        if(t->rowCount()>limit)t->removeRow(0);
+        if(t->isVisible())t->scrollToBottom();
+    };
+    addRow(monitorTable_,1000);
+    if(recording_) {
+        ++recordedCount_;
+        captured_.push_back(record);
+        if(captured_.size()>maxFrames_)captured_.remove(0,captured_.size()-maxFrames_);
+        addRow(recordTable_,qMin(maxFrames_,10000));
+    }
+}
+void DashboardWindow::appendSample() {
+    if(waveformPaused_)return;
+    double maxV=-1,minV=-1;
+    if(data_.hasCellExtremes){maxV=data_.maxCellVoltage;minV=data_.minCellVoltage;}
+    QVector<double> sample={
+        data_.hasSummary?data_.packVoltage:-999,
+        data_.hasStatus?data_.currentRawAmps:-999,
+        data_.hasStatus?double(data_.soc):-999,
+        data_.hasStatus?double(data_.soh):-999,maxV,minV
+    };
+    if(trends_.size()!=sample.size())trends_=QVector<QVector<double>>(sample.size());
+    for(int i=0;i<sample.size();++i){
+        trends_[i].append(sample[i]);
+        if(trends_[i].size()>160)trends_[i].remove(0,trends_[i].size()-160);
+    }
+}
+void DashboardWindow::updateGraphs() {
+    if(graphs_.size()!=8)return;
+    auto history=[this](std::initializer_list<int> indices) {
+        QVector<QVector<double>> result;
+        for(int i:indices)
+            result<<((i<trends_.size())?trends_[i]:QVector<double>{});
+        return result;
+    };
+    graphs_[0]->setSeries(history({0,1}),{blue,yellow});
+    graphs_[1]->setSeries(history({2,3}),{purple,green});
+    graphs_[2]->setSeries(history({4,5}),{red,blue});
+    QVector<double> cells,temp;
+    const int nCells=data_.hasSummary?data_.cellCount:(demo_?data_.cellCount:0);
+    const int nTemps=data_.hasSummary?data_.temperatureCount:(demo_?data_.temperatureCount:0);
+    for(int i=0;i<nCells;++i)cells<<data_.cells[i];
+    for(int i=0;i<nTemps;++i)temp<< (data_.temperatures[i]==-999?-999.0:double(data_.temperatures[i]));
+    graphs_[3]->setSeries({cells},{blue});
+    graphs_[4]->setSeries({temp},{green});
+    graphs_[5]->setSeries({cells},{blue});
+    graphs_[6]->setSeries({temp},{green});
+    graphs_[7]->setSeries(history({0,1,2,4,5}),{blue,yellow,purple,green,red});
+}
+void DashboardWindow::updateFaults() {
+    const struct {const char *name;int byte;int shift;} fields[]={
+        {"电源过压",0,0},{"电源欠压",0,2},{"绝缘检测模块通讯故障",0,4},
+        {"绝缘电阻过低",0,6},{"单体过压",2,2},{"单体欠压",2,4},
+        {"总压过高",2,6},{"总压过低",3,0},{"高温",3,4},
+        {"低温",3,6},{"充电过流",4,0},{"放电过流",4,2},{"SOC过低",4,4}
+    };
+    int counts[4]={0,0,0,0};
+    for(int i=0;i<13;++i) {
+        const QString name=QString::fromUtf8(fields[i].name);
+        int level=-1;
+        if(data_.hasFaultFrame) {
+            level=0;
+            for(int j=1;j<=3;++j)
+                if(data_.faults.contains(name+QStringLiteral("（%1级）").arg(j)))level=j;
+        }
+        if(level>0)counts[i<4?0:i<8?1:i<10?2:3]++;
+        QStringList row={name,level<0?QStringLiteral("--"):QString::number(level),
+            QStringLiteral("BYTE%1 bit[%2:%3]").arg(fields[i].byte+1).arg(fields[i].shift+1).arg(fields[i].shift),
+            level<0?QStringLiteral("未收到"):level==0?QStringLiteral("无故障"):QStringLiteral("%1级故障").arg(level)};
+        for(int j=0;j<row.size();++j){
+            auto *item=faultTable_->item(i,j);
+            if(!item){item=new QTableWidgetItem;faultTable_->setItem(i,j,item);}
+            item->setText(row[j]);
+            item->setForeground(level>0?(level==3?red:yellow):QColor("#a9c4dc"));
+        }
+    }
+    for(int i=0;i<4;++i)faultCounts_[i]->setText(data_.hasFaultFrame?QString::number(counts[i])+QStringLiteral(" 项"):QStringLiteral("--"));
+}
+void DashboardWindow::refreshUi() {
+    updateConnectionText();
+    if(footerValues_.size()==3){
+        footerValues_[0]->setText(QStringLiteral("设备 ID: 0x02018100"));
+        footerValues_[1]->setText(QStringLiteral("接收帧: ")+QString::number(receiveCount_));
+        const qint64 secs=clock_.elapsed()/1000;
+        footerValues_[2]->setText(QStringLiteral("运行时间: %1:%2")
+            .arg(secs/60,2,10,QChar('0')).arg(secs%60,2,10,QChar('0')));
+    }
+    if(overviewValues_.size()!=6)return;
+    overviewValues_[0]->setText(data_.hasSummary?n(data_.packVoltage)+QStringLiteral(" V"):QStringLiteral("--"));
+    overviewValues_[1]->setText(data_.hasStatus?n(data_.currentRawAmps)+QStringLiteral(" A*"):QStringLiteral("--"));
+    overviewValues_[2]->setText(data_.hasStatus?QString::number(data_.soc)+QStringLiteral(" %"):QStringLiteral("--"));
+    overviewValues_[3]->setText(data_.hasStatus?QString::number(data_.soh)+QStringLiteral(" %"):QStringLiteral("--"));
+    overviewValues_[4]->setText(data_.hasStatus?(data_.chargeState==0?QStringLiteral("静态"):data_.chargeState==1?QStringLiteral("充电"):data_.chargeState==2?QStringLiteral("放电"):QStringLiteral("未知")):QStringLiteral("--"));
+    overviewValues_[5]->setText(data_.hasCellExtremes?n((data_.maxCellVoltage-data_.minCellVoltage)*1000,1)+QStringLiteral(" mV"):QStringLiteral("--"));
+
+    const int numCells=data_.hasSummary?data_.cellCount:0;
+    const int numTemps=data_.hasSummary?data_.temperatureCount:0;
+    double sum=0;int count=0;double maxV=-1,minV=1e9;
+    for(int i=0;i<numCells;++i)if(data_.cells[i]>=0) {
+        const double v=data_.cells[i];++count;sum+=v;maxV=qMax(maxV,v);minV=qMin(minV,v);
+    }
+    const double avg=count?sum/count:0;
+    const bool cellExt=data_.hasCellExtremes;
+    const QStringList cv={cellExt?n(data_.maxCellVoltage,3)+QStringLiteral(" V"):QStringLiteral("--"),
+        cellExt?n(data_.minCellVoltage,3)+QStringLiteral(" V"):QStringLiteral("--"),
+        count?n(avg,3)+QStringLiteral(" V"):QStringLiteral("--"),
+        cellExt?n((data_.maxCellVoltage-data_.minCellVoltage)*1000,1)+QStringLiteral(" mV"):QStringLiteral("--")};
+    for(int i=0;i<cellValues_.size();++i)cellValues_[i]->setText(cv[i]);
+    if(cellTable_&&cellTable_->rowCount()!=numCells)cellTable_->setRowCount(numCells);
+    for(int i=0;i<numCells;++i){
+        double v=data_.cells[i];bool valid=v>=0;
+        bool alarm=valid&&(v*1000>highVoltage_->value()||v*1000<lowVoltage_->value());
+        QStringList row={QString("#%1").arg(i+1,3,10,QChar('0')),
+            valid?n(v,3):QStringLiteral("--"),
+            valid&&count?n((v-avg)*1000,1):QStringLiteral("--"),
+            !valid?QStringLiteral("未收到"):alarm?QStringLiteral("本地阈值告警"):QStringLiteral("正常")};
+        for(int j=0;j<row.size();++j){
+            auto *item=cellTable_->item(i,j);if(!item){item=new QTableWidgetItem;cellTable_->setItem(i,j,item);}
+            item->setText(row[j]);item->setForeground(alarm?red:QColor("#c5d8ed"));
+        }
+    }
+    double tempSum=0;int tempSamples=0,maxT=-999,minT=999;
+    for(int i=0;i<numTemps;++i)if(data_.temperatures[i]!=-999) {
+        int t=data_.temperatures[i];tempSum+=t;++tempSamples;maxT=qMax(maxT,t);minT=qMin(minT,t);
+    }
+    const double tempAvg=tempSamples?tempSum/tempSamples:0;
+    const QStringList tv={
+        data_.hasTempExtremes?QString::number(data_.maxTemperature)+QStringLiteral(" °C"):QStringLiteral("--"),
+        data_.hasTempExtremes?QString::number(data_.minTemperature)+QStringLiteral(" °C"):QStringLiteral("--"),
+        tempSamples?n(tempAvg,1)+QStringLiteral(" °C"):QStringLiteral("--"),
+        data_.hasTempExtremes?QString::number(data_.maxTemperature-data_.minTemperature)+QStringLiteral(" °C"):QStringLiteral("--")
+    };
+    for(int i=0;i<temperatureValues_.size();++i)temperatureValues_[i]->setText(tv[i]);
+    if(temperatureTable_&&temperatureTable_->rowCount()!=numTemps)temperatureTable_->setRowCount(numTemps);
+    for(int i=0;i<numTemps;++i) {
+        int t=data_.temperatures[i];bool valid=t!=-999;
+        bool alarm=valid&&(t>highTemperature_->value()||t<lowTemperature_->value());
+        QStringList row={QString("#%1").arg(i+1,2,10,QChar('0')),
+            valid?QString::number(t):QStringLiteral("--"),
+            valid?n(t-tempAvg,1):QStringLiteral("--"),
+            !valid?QStringLiteral("未收到"):alarm?QStringLiteral("本地阈值告警"):QStringLiteral("正常")};
+        for(int j=0;j<row.size();++j) {
+            auto *item=temperatureTable_->item(i,j);
+            if(!item){item=new QTableWidgetItem;temperatureTable_->setItem(i,j,item);}
+            item->setText(row[j]);item->setForeground(alarm?red:QColor("#c5d8ed"));
+        }
+    }
+    updateFaults();updateGraphs();
+    if(recordingValues_.size()==4) {
+        recordingValues_[0]->setText(recording_?QStringLiteral("录制中"):QStringLiteral("已停止"));
+        recordingValues_[1]->setText(QString::number(recordedCount_)+QStringLiteral(" 帧"));
+        recordingValues_[2]->setText(n(captured_.size()*100.0/1024.0,1)+QStringLiteral(" KB"));
+        recordingValues_[3]->setText(QString::number(captured_.size())+QStringLiteral(" 帧"));
+    }
+}
+void DashboardWindow::exportTable(QTableWidget *source,const QString &name) {
+    const QString path=QFileDialog::getSaveFileName(this,QStringLiteral("导出 CSV"),name,QStringLiteral("CSV (*.csv)"));
+    if(path.isEmpty())return;
+    QFile f(path);
+    if(!f.open(QIODevice::WriteOnly|QIODevice::Text)){
+        QMessageBox::warning(this,QStringLiteral("导出失败"),f.errorString());return;
+    }
+    QTextStream out(&f);
+    out.setEncoding(QStringConverter::Utf8);
+    auto cell=[](QString s){s.replace("\"","\"\"");return QStringLiteral("\"")+s+QStringLiteral("\"");};
+    for(int c=0;c<source->columnCount();++c){if(c)out<<',';out<<cell(source->horizontalHeaderItem(c)->text());}
+    out<<'\n';
+    for(int r=0;r<source->rowCount();++r){
+        for(int c=0;c<source->columnCount();++c) {
+            if(c)out<<',';
+            auto *item=source->item(r,c);
+            out<<cell(item?item->text():QString{});
+        }
+        out<<'\n';
+    }
+}
+void DashboardWindow::exportFrames() {exportTable(recordTable_,QStringLiteral("bms_can_log.csv"));}
