@@ -1,6 +1,6 @@
 # Power Battery Management System
 
-动力电池及 BMS 调试软件（Qt 6、C++17、Qt Widgets、CMake）。
+动力电池及 BMS 调试软件（Qt 6、C++17、Qt Widgets）。以 **qmake / .pro** 为主要构建方式，保留 CMake 作为可选方案。
 
 ## 功能
 
@@ -18,7 +18,7 @@
 - 从本人的 `mmWaveRadar/libs/ControlCAN.dll` 复制 **ControlCAN.dll 到本程序可执行文件同一目录**（与位数一致）。
   本仓库不再重复提交厂商 DLL。使用你自己的已授权驱动文件。
 
-Qt Creator 打开 `CMakeLists.txt`，选择 Qt 6 Kit，构建运行。
+**推荐：** Qt Creator 打开根目录的 `PowerBatteryManagementSystem.pro`，选择 Qt 6 Kit（如 Qt 6.7.3 MSVC 2022 64-bit），构建运行。需要使用 qmake 的 Qt 6 Kit；如果仅安装了 CMake Kit，请安装对应的 Qt qmake 构建组件。\n\n**可选：** 也可以使用 `CMakeLists.txt` 构建。
 
 ## 连接步骤
 
@@ -42,3 +42,11 @@ Qt Creator 打开 `CMakeLists.txt`，选择 Qt 6 Kit，构建运行。
 ## 后续
 
 增加报文日志、超时检测、真实测量趋势曲线与故障码表，并进行 Windows MSVC / USB-CAN 实机验证。
+
+## Git 仓库
+
+仓库已更名为 `JYFFF96/PowerBatteryManagementSystem`。本地已有仓库时更新远程地址：
+
+```bash
+git remote set-url origin https://github.com/JYFFF96/PowerBatteryManagementSystem.git
+```
