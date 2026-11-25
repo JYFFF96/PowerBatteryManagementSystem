@@ -9,8 +9,8 @@ find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
 
 qt_add_executable(PowerBatteryManagementSystem
     src/main.cpp
-    src/mainwindow.h
-    src/mainwindow.cpp
+    src/dashboardwindow.h
+    src/dashboardwindow.cpp
     src/bmsprotocol.h
     src/bmsprotocol.cpp
     src/canadapter.h
