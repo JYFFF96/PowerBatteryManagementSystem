@@ -1,52 +1,43 @@
-# Power Battery Management System
+# PowerBatteryManagementSystem — Qt Widgets 深色监控版
 
-动力电池及 BMS 调试软件（Qt 6、C++17、Qt Widgets）。以 **qmake / .pro** 为主要构建方式，保留 CMake 作为可选方案。
+基于用户参考截图重新设计的 **Qt 6 + Widgets + C++17 + qmake (.pro)** 动力电池/BMS 调试客户端。
 
-## 功能
+## 界面
 
-- BMS 模拟演示模式（无硬件时启动）
-- 与 [mmWaveRadar](https://github.com/JYFFF96/mmWaveRadar) 相同的 **ControlCAN.dll / VCI_*** 方式连接 Windows USB-CAN 设备
-- 设备类型默认 `4`，设备索引可选，CAN0/CAN1 可切换；250 kbps，29 位扩展帧
-- TKB BMS V1.1 报文接收和解析：总电压、串数/温感数、SOC、SOH、电流原始值、充放电状态、单体极值、温度极值、故障位状态
-- 动态展示最多 192 节单体电压、64 路温度
-- 当前单体数据 CSV 导出
+主界面采用深色工业监控风格、左侧导航和顶部 CAN 控制栏，包含九个页面：
 
-## Windows 环境
+1. 实时总览：总压、电流原始值、SOC、SOH、充放电状态、单体压差、走势图和分布图
+2. 单体电压：1～192 节电压监测、极值/平均值/压差、柱状图、CSV 导出
+3. 温度监控：1～64 路温感、极值/平均值/温差、柱状图
+4. 故障诊断：TKB 协议 13 种故障位、0～3 级状态
+5. 波形记录：总压、电流原始值、SOC 和电压极值，暂停/清除
+6. 报文监视：实时 RX CAN 数据及解析名称
+7. 数据记录：录制缓冲、停止、导出 CSV
+8. CAN 下发：**只展示协议能力，发送禁用**（精简版未提供 ECU→BMS 完整指令格式）
+9. 系统设置：本地阈值、模拟规模、录制缓冲数量，保存/恢复默认
 
-- Qt 6.2+，Qt Widgets，CMake 3.21+，MSVC 2022 或匹配的 MinGW 工具链
-- 安装对应 USB-CAN 设备的驱动
-- 从本人的 `mmWaveRadar/libs/ControlCAN.dll` 复制 **ControlCAN.dll 到本程序可执行文件同一目录**（与位数一致）。
-  本仓库不再重复提交厂商 DLL。使用你自己的已授权驱动文件。
+## 构建
 
-**推荐：** Qt Creator 打开根目录的 `PowerBatteryManagementSystem.pro`，选择 Qt 6 Kit（如 Qt 6.7.3 MSVC 2022 64-bit），构建运行。需要使用 qmake 的 Qt 6 Kit；如果仅安装了 CMake Kit，请安装对应的 Qt qmake 构建组件。\n\n**可选：** 也可以使用 `CMakeLists.txt` 构建。
+Qt Creator 打开 `PowerBatteryManagementSystem.pro`，选择 **Qt 6.7.3 / MSVC 2022 64-bit** Kit，运行 qmake 并构建。
+CMake 项目文件作为可选方式同步维护。
 
-## 连接步骤
+Windows 需要将本人 `mmWaveRadar/libs/ControlCAN.dll` 复制至生成的 EXE 同目录，确保 DLL 位数与编译器一致并已安装硬件驱动。程序通过 `QLibrary` 读取 VCI_* 导出函数，不依赖厂商 .lib 静态导入库。
 
-1. 用 CAN-H/CAN-L 接入 BMS CAN 总线，确认终端电阻、供电和设备驱动。
-2. 选择设备索引（默认 0），CAN0 或 CAN1，点击 **连接 CAN**。
-3. 程序采用 `VCI_OpenDevice(4, index, 0)`、`VCI_InitCAN`、`VCI_StartCAN`、`VCI_Receive`。
-4. 解析 TKB 扩展帧 `0x02018100`～`0x02058100`、`0x02108100`～`0x023F8100`、`0x02468100`～`0x024D8100`。
-5. 需要恢复模拟模式时先点击 **断开 CAN**。
+默认设备类型=4，设备索引=0，CAN0，波特率 **250 kbps**，扩展帧（29-bit），8 字节。
 
-当前代码只读，不向 BMS 发送控制命令。
+可点击“启动模拟”查看有意义的示例数据；连接真实 CAN 时停止模拟并清空状态，只显示实际收到的数据。
 
-## 协议与硬件待验证项
+## 数据协议与安全说明
 
-- 精简版协议只注明电流分辨率 0.1A，**没有明确 16 位电流有符号编码**；程序显示 `A (raw)`，功率显示“待确认电流符号”，不把错误符号用于工程判断。
-- 温度范围标题写 `FID=0x46～0x4D`，表格中的 FID 写 `0x46～0x49`；本实现按标题支持 64 路，需厂家确认。
-- `0x02028100` 最严重故障的故障代码表未随精简版提供，当前保存原始代码；故障等级按 `0x02058100` 的 2-bit 字段解码。
-- 驱动 DLL 的适配器型号、USB-CAN 硬件和对应驱动版本仍需实机测试。
-- 实机报文缺失时 UI 的 `--` 表示未收到；当前没有实现超时标红。
-- 模拟模式使用独立的示意数据，不能作为实际 BMS 设备的安全保护逻辑。
+- TKB BMS V1.1 精简版定义：0x02018100～0x02058100、0x02108100～0x023F8100、0x02468100～0x024D8100
+- 温度 FID 范围在文档的标题和表格中存在矛盾，暂按标题的 0x46～0x4D 解析，须实机核对。
+- **电流编码的有符号定义未明确**，界面显示 A* 原始换算值，不以此值计算准确充放电功率。
+- 本地阈值只是上位机视觉提示，**不修改 BMS 保护设置**。
+- CAN 下发控制功能默认不实现：目前没有完整厂商下发协议，避免错误控制电池系统。
+- 目前尚未完成实际 Windows Qt/MSVC 编译和硬件联调验证。
 
-## 后续
+## 结构
 
-增加报文日志、超时检测、真实测量趋势曲线与故障码表，并进行 Windows MSVC / USB-CAN 实机验证。
+`src/dashboardwindow.*`：全部界面、绘图、模拟/实时数据刷新、导出；`src/bmsprotocol.*`：TKB 协议解析；`src/canadapter.*`：Windows ControlCAN 接收线程。
 
-## Git 仓库
-
-仓库已更名为 `JYFFF96/PowerBatteryManagementSystem`。本地已有仓库时更新远程地址：
-
-```bash
-git remote set-url origin https://github.com/JYFFF96/PowerBatteryManagementSystem.git
-```
+下一阶段可将单页 Widget 拆分为独立类，补充接收超时提示、真实电流符号、原始 CAN 精确日志时序与完整厂商指令表。
