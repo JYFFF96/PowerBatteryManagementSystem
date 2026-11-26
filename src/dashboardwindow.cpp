@@ -1,4 +1,5 @@
 #include "dashboardwindow.h"
+#include "qcustomplot.h"
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -15,7 +16,6 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPainter>
-#include <QPainterPath>
 #include <QStyle>
 #include <QStringConverter>
 #include <QPaintEvent>
@@ -65,64 +65,143 @@ QString classify(quint32 id) {
     return QStringLiteral("其他帧");
 }
 }
-class GraphWidget : public QWidget {
+// All chart widgets use the same QCustomPlot 2.1.1 implementation as mmWaveRadar.
+// The widget is owned and painted exclusively by the GUI thread.
+class GraphWidget : public QCustomPlot {
 public:
-    explicit GraphWidget(bool bars, QWidget *parent = nullptr) : QWidget(parent), bars_(bars) {
+    explicit GraphWidget(bool bars, QWidget *parent = nullptr)
+        : QCustomPlot(parent), bars_(bars) {
         setMinimumHeight(135);
-        setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
-    }
-    void setSeries(const QVector<QVector<double>> &series, const QVector<QColor> &colors,
-                   const QStringList &names = {}) {
-        values_ = series; colors_ = colors; names_ = names; update();
-    }
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
-        QRectF plot = rect().adjusted(28,13,-12,-22);
-        p.fillRect(plot,QColor("#0b1017"));
-        p.setPen(QPen(QColor("#273446"),1));
-        for (int i=0;i<=4;++i) {
-            const double y=plot.top()+plot.height()*i/4.0;
-            p.drawLine(QPointF(plot.left(),y),QPointF(plot.right(),y));
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        setBackground(QColor("#0b1017"));
+        setAntialiasedElements(QCP::aeNone);
+        plotLayout()->setMargins(QMargins(5, 3, 3, 5));
+        axisRect()->setBackground(QColor("#0b1017"));
+        for (QCPAxis *axis : {xAxis, yAxis}) {
+            axis->setBasePen(QPen(QColor("#334155")));
+            axis->setTickPen(QPen(QColor("#334155")));
+            axis->setSubTickPen(Qt::NoPen);
+            axis->setTickLabelColor(QColor("#8597b0"));
+            axis->setLabelColor(QColor("#aabbd1"));
+            axis->grid()->setPen(QPen(QColor("#273446")));
+            axis->grid()->setSubGridVisible(false);
         }
-        if (values_.isEmpty() || values_.first().isEmpty()) return;
-        if (bars_) {
-            const auto &v=values_.first();
-            double lo=0, hi=1;
-            for (double x:v) if (std::isfinite(x) && x>-500) { lo=qMin(lo,x); hi=qMax(hi,x); }
-            const double step=plot.width()/qMax(1,v.size());
-            for (int i=0;i<v.size();++i) {
-                if (!std::isfinite(v[i]) || v[i]<-500) continue;
-                const double h=qBound(0.0,(v[i]-lo)/(hi-lo+0.00001)*plot.height(),plot.height());
-                QColor color=colors_.isEmpty()?blue:colors_.at(i%colors_.size());
-                p.fillRect(QRectF(plot.left()+i*step+1, plot.bottom()-h, qMax(1.0,step-2),h),color);
-            }
+        xAxis->grid()->setVisible(false);
+        yAxis->setNumberFormat("f");
+        yAxis->setNumberPrecision(2);
+        if (!bars_) {
+            auto ticker=QSharedPointer<QCPAxisTickerDateTime>(new QCPAxisTickerDateTime);
+            ticker->setDateTimeFormat("HH:mm:ss");
+            ticker->setTickCount(5);
+            xAxis->setTicker(ticker);
+            xAxis->setTickLabelRotation(0);
+            xAxis->setRange(QDateTime::currentMSecsSinceEpoch()/1000.0-60,
+                            QDateTime::currentMSecsSinceEpoch()/1000.0);
         } else {
-            double lo=1e100,hi=-1e100;
-            for(const auto &series:values_) for(double x:series)
-                if(std::isfinite(x) && x>-500) {lo=qMin(lo,x);hi=qMax(hi,x);}
-            if(lo>hi) return;
-            if(qAbs(hi-lo)<0.01){hi+=0.5;lo-=0.5;}
-            const int count=qMax(2,values_.first().size());
-            for(int k=0;k<values_.size();++k) {
-                const auto &s=values_[k];
-                p.setPen(QPen(colors_.isEmpty()?blue:colors_[k%colors_.size()],2));
-                QPainterPath path; bool first=true;
-                for(int i=0;i<s.size();++i) {
-                    if(!std::isfinite(s[i])||s[i]<-500){first=true;continue;}
-                    QPointF pt(plot.left()+plot.width()*i/(count-1.0),
-                               plot.bottom()-(s[i]-lo)/(hi-lo)*plot.height());
-                    if(first){path.moveTo(pt);first=false;}else path.lineTo(pt);
-                }
-                p.drawPath(path);
+            auto ticker=QSharedPointer<QCPAxisTickerText>(new QCPAxisTickerText);
+            xAxis->setTicker(ticker);
+            for (int i=0;i<3;++i) {
+                auto *bar=new QCPBars(xAxis,yAxis);
+                bar->setPen(Qt::NoPen);
+                bar->setBrush(QColor(i==0?"#5ab5ff":i==1?"#ed645d":"#b977ff"));
+                barsSeries_.append(bar);
             }
         }
+    }
+
+    void setTimeSeries(const QVector<double> &times,
+                       const QVector<QVector<double>> &series,
+                       const QVector<QColor> &colors) {
+        if (bars_)return;
+        if (series.size()!=graphCount() || times.size()<lastCount_) {
+            clearGraphs();
+            for(int i=0;i<series.size();++i) {
+                QCPAxis *axis=yAxis;
+                if(series.size()==2 && i==1)axis=yAxis2;
+                auto *g=addGraph(xAxis,axis);
+                g->setPen(QPen(colors.isEmpty()?QColor("#5ab5ff"):colors[i%colors.size()],1.6));
+                g->setAdaptiveSampling(true);
+                g->setLineStyle(QCPGraph::lsLine);
+            }
+            lastCount_=0;
+            lastKey_=-1;
+        }
+        if (series.isEmpty() || times.isEmpty()) {
+            xAxis->setRange(QDateTime::currentMSecsSinceEpoch()/1000.0-60,
+                            QDateTime::currentMSecsSinceEpoch()/1000.0);
+            replot(QCustomPlot::rpQueuedReplot);
+            return;
+        }
+        // In one hour at 2 Hz, at most ~7200 time samples are in memory.
+        const double newest=times.last();
+        const double cutoff=newest-3600.0;
+        for(int k=0;k<series.size();++k) {
+            const int maxCount=qMin(times.size(),series[k].size());
+            for(int i=0;i<maxCount;++i) {
+                if (times[i]<=lastKey_ || times[i]<cutoff)continue;
+                const double value=series[k][i];
+                if(std::isfinite(value) && value>-500)
+                    graph(k)->addData(times[i],value);
+            }
+            graph(k)->data()->removeBefore(cutoff);
+            graph(k)->rescaleValueAxis(false,true);
+        }
+        lastKey_=newest;lastCount_=times.size();
+        double span=qMin(3600.0,qMax(60.0,newest-times.first()));
+        xAxis->setRange(newest-span,newest);
+        if(series.size()==2) {
+            yAxis2->setVisible(true);
+            yAxis2->setTickLabelColor(QColor("#f5be43"));
+            yAxis2->setBasePen(QPen(QColor("#334155")));
+        } else {
+            yAxis2->setVisible(false);
+        }
+        if (graphCount()) {
+            if(yAxis->range().size()<0.001)yAxis->scaleRange(1.1);
+            else yAxis->scaleRange(1.08);
+            if(series.size()==2)yAxis2->scaleRange(1.08);
+        }
+        replot(QCustomPlot::rpQueuedReplot);
+    }
+
+    void setSeries(const QVector<QVector<double>> &series,
+                   const QVector<QColor> &colors, const QStringList & = {}) {
+        if (!bars_)return;
+        const auto values=series.isEmpty()?QVector<double>{}:series.first();
+        QVector<double> xs[3],ys[3];
+        double minValue=1e100,maxValue=-1e100;
+        int minIndex=-1,maxIndex=-1;
+        for(int i=0;i<values.size();++i) {
+            const double v=values[i];
+            if(!std::isfinite(v)||v<-500)continue;
+            if(v<minValue){minValue=v;minIndex=i;}
+            if(v>maxValue){maxValue=v;maxIndex=i;}
+        }
+        for(int i=0;i<values.size();++i) {
+            const double v=values[i];if(!std::isfinite(v)||v<-500)continue;
+            const int index=i==maxIndex?1:i==minIndex?2:0;
+            xs[index].append(i+1);ys[index].append(v);
+        }
+        for(int j=0;j<3;++j) {
+            barsSeries_[j]->setData(xs[j],ys[j],true);
+            barsSeries_[j]->setWidth(values.size()>48?0.85:0.82);
+        }
+        xAxis->setRange(0.3,qMax(2,values.size())+0.7);
+        const double margin=qMax(0.1,(maxValue-minValue)*0.2);
+        if(minIndex>=0)yAxis->setRange(minValue-margin,maxValue+margin);
+        else yAxis->setRange(0,1);
+        auto ticker=QSharedPointer<QCPAxisTickerText>(new QCPAxisTickerText);
+        for(int i=0;i<values.size();++i)if((values.size()<=24 && i%2==0)
+              ||(values.size()>24 && i%qMax(1,values.size()/12)==0))
+            ticker->addTick(i+1,QString::number(i+1));
+        xAxis->setTicker(ticker);
+        replot(QCustomPlot::rpQueuedReplot);
     }
 private:
     bool bars_;
-    QVector<QVector<double>> values_;
-    QVector<QColor> colors_;
-    QStringList names_;
+    QVector<QCPBars*> barsSeries_;
+    int lastCount_=0;
+    double lastKey_=-1;
 };
 
 DashboardWindow::DashboardWindow(QWidget *parent) : QMainWindow(parent) {
@@ -324,6 +403,7 @@ QWidget *DashboardWindow::createOverview() {
     }
     l->addLayout(grid);
     auto *charts=new QHBoxLayout;
+    charts->setSpacing(12);
     for(const auto &name:{QStringLiteral("总电压 / 电流实时波形"),QStringLiteral("SOC / SOH"),
                            QStringLiteral("最大 / 最小单体电压")}) {
         auto *g=new GraphWidget(false); graphs_<<g;
@@ -412,7 +492,7 @@ QWidget *DashboardWindow::createWaveforms() {
         pause->setText(waveformPaused_?QStringLiteral("继续"):QStringLiteral("暂停"));
     });
     connect(clear,&QPushButton::clicked,this,[this]{
-        trends_.clear();updateGraphs();
+        trends_.clear();timestamps_.clear();graphsDirty_=true;updateGraphs();
     });
     return page(w);
 }
@@ -655,8 +735,7 @@ void DashboardWindow::consumeFrames(const QVector<CanFrame> &frames) {
     if(changed) {
         data_=protocol_.state();
         lastReceiveMs_=clock_.elapsed();
-        appendSample();
-        refreshUi();
+        liveDataDirty_=true;
     }
 }
 void DashboardWindow::addFrame(quint32 id,const QByteArray &raw,const QString &direction) {
@@ -679,47 +758,53 @@ void DashboardWindow::addFrame(quint32 id,const QByteArray &raw,const QString &d
 }
 void DashboardWindow::appendSample() {
     if(waveformPaused_)return;
-    double maxV=-1,minV=-1;
+    const double now=QDateTime::currentMSecsSinceEpoch()/1000.0;
+    if(!timestamps_.isEmpty() && now<=timestamps_.last())return;
+    double maxV=-999,minV=-999;
     if(data_.hasCellExtremes){maxV=data_.maxCellVoltage;minV=data_.minCellVoltage;}
-    QVector<double> sample={
+    const QVector<double> sample={
         data_.hasSummary?data_.packVoltage:-999,
         data_.hasStatus?data_.currentRawAmps:-999,
         data_.hasStatus?double(data_.soc):-999,
         data_.hasStatus?double(data_.soh):-999,maxV,minV
     };
     if(trends_.size()!=sample.size())trends_=QVector<QVector<double>>(sample.size());
-    for(int i=0;i<sample.size();++i){
-        trends_[i].append(sample[i]);
-        if(trends_[i].size()>160)trends_[i].remove(0,trends_[i].size()-160);
+    timestamps_.append(now);
+    for(int i=0;i<sample.size();++i)trends_[i].append(sample[i]);
+    // Time-based retention, NOT the old 160-sample limit. Drop all points older
+    // than one hour in all 6 series simultaneously, maintaining aligned indices.
+    int expired=0;
+    while(expired<timestamps_.size() && timestamps_[expired]<now-3600.0)++expired;
+    if(expired>0) {
+        timestamps_.remove(0,expired);
+        for(auto &series:trends_)series.remove(0,expired);
     }
+    graphsDirty_=true;
 }
 void DashboardWindow::updateGraphs() {
-    if(graphs_.size()!=8)return;
+    if(!graphsDirty_ || graphs_.size()!=8)return;
+    graphsDirty_=false;
     auto history=[this](std::initializer_list<int> indices) {
         QVector<QVector<double>> result;
         for(int i:indices)
             result<<((i<trends_.size())?trends_[i]:QVector<double>{});
         return result;
     };
-    graphs_[0]->setSeries(history({0,1}),{blue,yellow});
-    graphs_[1]->setSeries(history({2,3}),{purple,green});
-    graphs_[2]->setSeries(history({4,5}),{red,blue});
+    graphs_[0]->setTimeSeries(timestamps_,history({0,1}),{blue,yellow});
+    graphs_[1]->setTimeSeries(timestamps_,history({2,3}),{purple,green});
+    graphs_[2]->setTimeSeries(timestamps_,history({4,5}),{red,blue});
     QVector<double> cells,temp;
     const int nCells=data_.hasSummary?data_.cellCount:(demo_?data_.cellCount:0);
     const int nTemps=data_.hasSummary?data_.temperatureCount:(demo_?data_.temperatureCount:0);
-    // The overview is a fixed 24-cell dashboard. Preserve 24 positions
-    // even when some cell frames have not arrived; do not show cells 25+.
-    QVector<double> overviewCells(24, -999.0);
-    for(int i=0;i<qMin(24,nCells);++i)
-        overviewCells[i]=data_.cells[i];
-    // Detailed cell-voltage page retains the full protocol capacity.
+    QVector<double> overviewCells(24,-999.0);
+    for(int i=0;i<qMin(24,nCells);++i)overviewCells[i]=data_.cells[i];
     for(int i=0;i<nCells;++i)cells<<data_.cells[i];
-    for(int i=0;i<nTemps;++i)temp<< (data_.temperatures[i]==-999?-999.0:double(data_.temperatures[i]));
+    for(int i=0;i<nTemps;++i)temp<<(data_.temperatures[i]==-999?-999.0:double(data_.temperatures[i]));
     graphs_[3]->setSeries({overviewCells},{blue});
     graphs_[4]->setSeries({temp},{green});
     graphs_[5]->setSeries({cells},{blue});
     graphs_[6]->setSeries({temp},{green});
-    graphs_[7]->setSeries(history({0,1,2,4,5}),{blue,yellow,purple,green,red});
+    graphs_[7]->setTimeSeries(timestamps_,history({0,1,2,4,5}),{blue,yellow,purple,green,red});
 }
 void DashboardWindow::updateFaults() {
     const struct {const char *name;int byte;int shift;} fields[]={
@@ -752,6 +837,12 @@ void DashboardWindow::updateFaults() {
 }
 void DashboardWindow::refreshUi() {
     updateConnectionText();
+    const qint64 nowMs=clock_.elapsed();
+    if(can_ && can_->connected() && liveDataDirty_ && nowMs-lastSampleMs_>=500) {
+        liveDataDirty_=false;
+        lastSampleMs_=nowMs;
+        appendSample();
+    }
     if(footerValues_.size()==3){
         footerValues_[0]->setText(QStringLiteral("设备 ID: 0x02018100"));
         footerValues_[1]->setText(QStringLiteral("接收帧: ")+QString::number(receiveCount_));
