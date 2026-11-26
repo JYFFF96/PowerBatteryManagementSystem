@@ -67,6 +67,10 @@ private:
     qint64 lastReceiveMs_ = -1;
     int maxFrames_ = 2000;
     QVector<QStringList> captured_;
+    QVector<QStringList> pendingMonitorRows_;
+    QVector<QStringList> pendingRecordRows_;
+    bool displayDirty_ = true;
+    void flushFrameRows();
     QVector<QVector<double>> trends_;
     QVector<double> timestamps_;
     bool graphsDirty_ = true;
