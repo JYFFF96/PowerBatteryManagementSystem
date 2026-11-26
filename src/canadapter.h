@@ -9,7 +9,7 @@ class CanAdapter : public QThread {
 public:
     explicit CanAdapter(QObject *parent = nullptr);
     ~CanAdapter() override;
-    bool open(int deviceType, int deviceIndex, int channel, QString *error);
+    bool open(int deviceType, int deviceIndex, int channel, int baudKbps, QString *error);
     void close();
     bool connected() const { return opened_; }
 signals:
