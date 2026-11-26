@@ -507,7 +507,7 @@ QWidget *DashboardWindow::createMonitor() {
     monitorTable_=table({QStringLiteral("时间戳"),QStringLiteral("方向"),QStringLiteral("CAN ID"),
         QStringLiteral("DATA[0..7]"),QStringLiteral("解析")});
     l->addWidget(monitorTable_,1);
-    connect(clear,&QPushButton::clicked,this,[this]{monitorTable_->setRowCount(0);});
+    connect(clear,&QPushButton::clicked,this,[this]{monitorTable_->setRowCount(0);pendingMonitorRows_.clear();});
     return page(w);
 }
 
@@ -535,7 +535,7 @@ QWidget *DashboardWindow::createRecording() {
     l->addWidget(recordDetail_);
     connect(recordButton_,&QPushButton::clicked,this,[this]{
         recording_=true;recordedCount_=0;captured_.clear();recordTable_->setRowCount(0);
-        recordState_->setText(QStringLiteral("● 正在录制"));});
+        recordState_->setText(QStringLiteral("● 正在录制"));pendingRecordRows_.clear();});
     connect(stopRecordButton_,&QPushButton::clicked,this,[this]{
         recording_=false;recordState_->setText(QStringLiteral("● 已停止"));});
     connect(exportBtn,&QPushButton::clicked,this,[this]{exportFrames();});
@@ -633,14 +633,14 @@ void DashboardWindow::toggleCan() {
         updateConnectionText();refreshUi();return;
     }
     stopDemo();
-    protocol_.reset();data_=BmsState{};refreshUi();
+    protocol_.reset();data_=BmsState{};displayDirty_=true;refreshUi();
     QString error;
     if(!can_->open(adapterBox_->currentData().toInt(),deviceIndex_->currentData().toInt(),channelBox_->currentData().toInt(),baudBox_->currentData().toInt(),&error)) {
         QMessageBox::warning(this,QStringLiteral("CAN 连接失败"),error+
             QStringLiteral("\n确认同目录有对应架构的 ControlCAN.dll，并已安装驱动。"));
         updateConnectionText();return;
     }
-    protocol_.reset();data_=BmsState{};lastReceiveMs_=-1;
+    protocol_.reset();data_=BmsState{};lastReceiveMs_=-1;displayDirty_=true;
     adapterBox_->setEnabled(false);channelBox_->setEnabled(false);
     deviceIndex_->setEnabled(false);baudBox_->setEnabled(false);
     updateConnectionText();refreshUi();
@@ -736,26 +736,53 @@ void DashboardWindow::consumeFrames(const QVector<CanFrame> &frames) {
         data_=protocol_.state();
         lastReceiveMs_=clock_.elapsed();
         liveDataDirty_=true;
+        displayDirty_=true;
     }
 }
+// Queued display updates: reception and decoding never insert QTableWidget rows.
 void DashboardWindow::addFrame(quint32 id,const QByteArray &raw,const QString &direction) {
     const QStringList record={QDateTime::currentDateTime().toString("HH:mm:ss.zzz"),direction,
         canId(id),bytes(raw),classify(id)};
-    auto addRow=[&](QTableWidget *t,int limit){
-        if(!t)return;
-        const int r=t->rowCount();t->insertRow(r);
-        for(int col=0;col<record.size();++col)t->setItem(r,col,new QTableWidgetItem(record[col]));
-        if(t->rowCount()>limit)t->removeRow(0);
-        if(t->isVisible())t->scrollToBottom();
-    };
-    addRow(monitorTable_,1000);
+    pendingMonitorRows_.append(record);
+    if(pendingMonitorRows_.size()>1000)
+        pendingMonitorRows_.remove(0,pendingMonitorRows_.size()-1000);
     if(recording_) {
         ++recordedCount_;
-        captured_.push_back(record);
+        captured_.append(record);
         if(captured_.size()>maxFrames_)captured_.remove(0,captured_.size()-maxFrames_);
-        addRow(recordTable_,qMin(maxFrames_,10000));
+        pendingRecordRows_.append(record);
+        if(pendingRecordRows_.size()>1000)
+            pendingRecordRows_.remove(0,pendingRecordRows_.size()-1000);
     }
 }
+
+void DashboardWindow::flushFrameRows() {
+    // Keep the total widget row count bounded and amortize per-item allocations.
+    auto flush=[](QTableWidget *table,QVector<QStringList> &pending,int maxRows) {
+        if(!table||pending.isEmpty())return;
+        if(!table->isVisible()) {
+            // The raw rows remain in the bounded queue until the page is viewed.
+            return;
+        }
+        table->setUpdatesEnabled(false);
+        const int batch=qMin(150,pending.size());
+        for(int i=0;i<batch;++i) {
+            const auto &record=pending[i];
+            const int row=table->rowCount();
+            table->insertRow(row);
+            for(int col=0;col<record.size();++col)
+                table->setItem(row,col,new QTableWidgetItem(record[col]));
+        }
+        pending.remove(0,batch);
+        const int excess=table->rowCount()-maxRows;
+        for(int i=0;i<excess;++i)table->removeRow(0);
+        table->setUpdatesEnabled(true);
+        table->scrollToBottom();
+    };
+    flush(monitorTable_,pendingMonitorRows_,1000);
+    flush(recordTable_,pendingRecordRows_,1000);
+}
+
 void DashboardWindow::appendSample() {
     if(waveformPaused_)return;
     const double now=QDateTime::currentMSecsSinceEpoch()/1000.0;
@@ -843,6 +870,7 @@ void DashboardWindow::refreshUi() {
         lastSampleMs_=nowMs;
         appendSample();
     }
+    flushFrameRows();
     if(footerValues_.size()==3){
         footerValues_[0]->setText(QStringLiteral("设备 ID: 0x02018100"));
         footerValues_[1]->setText(QStringLiteral("接收帧: ")+QString::number(receiveCount_));
@@ -851,6 +879,8 @@ void DashboardWindow::refreshUi() {
             .arg(secs/60,2,10,QChar('0')).arg(secs%60,2,10,QChar('0')));
     }
     if(overviewValues_.size()!=6 || overviewNotes_.size()!=6 || overviewUnits_.size()!=6)return;
+    if(!displayDirty_ && !demo_ && !liveDataDirty_ && !graphsDirty_)return;
+    displayDirty_=false;
     const int numCells=data_.hasSummary?data_.cellCount:0;
     const int numTemps=data_.hasSummary?data_.temperatureCount:0;
     double sum=0;int count=0;
@@ -967,6 +997,7 @@ void DashboardWindow::refreshUi() {
         }
     }
     updateFaults();updateGraphs();
+    if(can_ && can_->connected())liveDataDirty_=false;
     if(recordingValues_.size()==4) {
         recordingValues_[0]->setText(recording_?QStringLiteral("录制中"):QStringLiteral("已停止"));
         recordingValues_[1]->setText(QString::number(recordedCount_)+QStringLiteral(" 帧"));
