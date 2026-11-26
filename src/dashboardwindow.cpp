@@ -300,8 +300,22 @@ QWidget *DashboardWindow::createOverview() {
     const QStringList roles={"metricBlue","metricYellow","metricPurple","metricGreen","metricValue","metricYellow"};
     for(int i=0;i<titles.size();++i) {
         auto *card=new QFrame;card->setObjectName("panel");auto *cl=vertical(card,12);
-        cl->addWidget(label(titles[i],"muted"));auto *v=label("--",roles[i]);overviewValues_<<v;
-        cl->addWidget(v);
+        cl->addWidget(label(titles[i],"muted"));
+        auto *valueRow=new QHBoxLayout;
+        valueRow->setContentsMargins(0,0,0,0);
+        valueRow->setSpacing(4);
+        auto *v=label("--",roles[i]);
+        overviewValues_<<v;
+        valueRow->addWidget(v,0,Qt::AlignBottom);
+        const QStringList units={QStringLiteral("V"),QStringLiteral("A"),QStringLiteral("%"),
+                                 QStringLiteral("%"),QString(),QStringLiteral("mV")};
+        auto *unit=label(units[i]);
+        unit->setStyleSheet("font-size:13px;color:#8496af;");
+        overviewUnits_<<unit;
+        if(!units[i].isEmpty())
+            valueRow->addWidget(unit,0,Qt::AlignBottom);
+        valueRow->addStretch(1);
+        cl->addLayout(valueRow);
         auto *note=label(QStringLiteral("--"),"muted");
         note->setWordWrap(true);
         overviewNotes_<<note;
@@ -745,7 +759,7 @@ void DashboardWindow::refreshUi() {
         footerValues_[2]->setText(QStringLiteral("运行时间: %1:%2")
             .arg(secs/60,2,10,QChar('0')).arg(secs%60,2,10,QChar('0')));
     }
-    if(overviewValues_.size()!=6 || overviewNotes_.size()!=6)return;
+    if(overviewValues_.size()!=6 || overviewNotes_.size()!=6 || overviewUnits_.size()!=6)return;
     const int numCells=data_.hasSummary?data_.cellCount:0;
     const int numTemps=data_.hasSummary?data_.temperatureCount:0;
     double sum=0;int count=0;
@@ -757,12 +771,12 @@ void DashboardWindow::refreshUi() {
     // Reference pack specification is 24 x 3.2 V; not a BMS-reported nominal voltage.
     const QString nominalText=QStringLiteral("标称 76.8V (24×3.2V) · 均值 %1")
         .arg(count?n(avg,2)+QStringLiteral(" V"):QStringLiteral("--"));
-    overviewValues_[0]->setText(data_.hasSummary?n(data_.packVoltage,2)+QStringLiteral(" V"):QStringLiteral("--"));
+    overviewValues_[0]->setText(data_.hasSummary?n(data_.packVoltage,2):QStringLiteral("--"));
     overviewNotes_[0]->setText(nominalText);
     overviewNotes_[0]->setStyleSheet("color:#b977ff;font-size:11px;");
 
     // Show the unsigned raw value * 0.1 A; charge/discharge direction comes from the separate state field.
-    overviewValues_[1]->setText(data_.hasStatus?n(data_.currentRawAmps,2)+QStringLiteral(" A"):QStringLiteral("--"));
+    overviewValues_[1]->setText(data_.hasStatus?n(data_.currentRawAmps,2):QStringLiteral("--"));
     const QString direction=data_.chargeState==1?QStringLiteral("充电中"):
         data_.chargeState==2?QStringLiteral("放电中"):
         data_.chargeState==0?QStringLiteral("空闲"):QStringLiteral("状态未知");
@@ -772,14 +786,14 @@ void DashboardWindow::refreshUi() {
     overviewNotes_[1]->setStyleSheet(QStringLiteral("color:%1;font-size:11px;")
         .arg(data_.chargeState==1?"#53c98c":data_.chargeState==2?"#f5be43":"#7a91ad"));
 
-    overviewValues_[2]->setText(data_.hasStatus?n(data_.soc,2)+QStringLiteral(" %"):QStringLiteral("--"));
+    overviewValues_[2]->setText(data_.hasStatus?n(data_.soc,2):QStringLiteral("--"));
     // Neither estimated range nor vehicle energy consumption is in this protocol.
     overviewNotes_[2]->setText(data_.hasStatus
         ?QStringLiteral("SOH %1% · 续航约 -- km（未提供）").arg(data_.soh)
         :QStringLiteral("SOH -- · 续航约 -- km"));
     overviewNotes_[2]->setStyleSheet("color:#b977ff;font-size:11px;");
 
-    overviewValues_[3]->setText(data_.hasStatus?QString::number(data_.soh)+QStringLiteral(" %"):QStringLiteral("--"));
+    overviewValues_[3]->setText(data_.hasStatus?QString::number(data_.soh):QStringLiteral("--"));
     const QString health=!data_.hasStatus?QStringLiteral("--"):
         data_.soh>=95?QStringLiteral("优秀"):
         data_.soh>=85?QStringLiteral("良好"):QStringLiteral("一般");
@@ -808,7 +822,7 @@ void DashboardWindow::refreshUi() {
     overviewNotes_[4]->setStyleSheet("color:#71839c;font-size:11px;");
 
     overviewValues_[5]->setText(data_.hasCellExtremes
-        ?n((data_.maxCellVoltage-data_.minCellVoltage)*1000,2)+QStringLiteral(" mV")
+        ?n((data_.maxCellVoltage-data_.minCellVoltage)*1000,2)
         :QStringLiteral("--"));
     overviewNotes_[5]->setText(data_.hasCellExtremes
         ?QStringLiteral("%1 V (最高) - %2 V (最低) · 阈值 %3mV")
