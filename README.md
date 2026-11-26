@@ -41,3 +41,11 @@ Windows 需要将本人 `mmWaveRadar/libs/ControlCAN.dll` 复制至生成的 EXE
 `src/dashboardwindow.*`：全部界面、绘图、模拟/实时数据刷新、导出；`src/bmsprotocol.*`：TKB 协议解析；`src/canadapter.*`：Windows ControlCAN 接收线程。
 
 下一阶段可将单页 Widget 拆分为独立类，补充接收超时提示、真实电流符号、原始 CAN 精确日志时序与完整厂商指令表。
+
+## QCustomPlot 曲线与性能（本次更新）
+
+- 从本人的 `mmWaveRadar` 仓库复用 **QCustomPlot 2.1.1** 源码（`thirdparty/qcustomplot/`），保留其 GPL 许可声明；.pro 和 CMake 均已加入 Qt PrintSupport 与源文件。
+- 实时总览的 3 张趋势图按 **1:1:1** 等宽排列；所有 8 张图表都采用 QCustomPlot，单体与温度分布继续使用柱状图。
+- 趋势曲线 X 轴使用 `HH:mm:ss` 本地时间。按时间戳保留最近 **3600 秒**，过期样本从曲线缓冲和 QCustomPlot 内部数据中删除，而不是按固定 160 条截断。
+- CAN 接收继续运行于独立的 QThread；UI 主线程只处理已接收的数据批次，图表更新最多约每 500ms 一次，监视/录制表格也改为定时、限量刷新以减少界面卡顿。
+- 建议先在无设备情况下启动模拟并运行至少 1 小时，观察曲线的时间轴与内存使用。Windows Qt 6 / MSVC 2022 实机编译和高负载联调仍需本地验证。
