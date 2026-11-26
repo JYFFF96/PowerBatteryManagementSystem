@@ -306,7 +306,7 @@ QWidget *DashboardWindow::createOverview() {
     auto *bottom=new QHBoxLayout;
     auto *vg=new GraphWidget(true);graphs_<<vg;
     auto *tg=new GraphWidget(true);graphs_<<tg;
-    bottom->addWidget(panel(QStringLiteral("单体电压分布 · 最多192节"),vg),3);
+    bottom->addWidget(panel(QStringLiteral("单体电压分布 · 24节"),vg),3);
     bottom->addWidget(panel(QStringLiteral("温度分布 · 最多64路"),tg),2);
     l->addLayout(bottom,3);
     return page(w);
@@ -678,9 +678,15 @@ void DashboardWindow::updateGraphs() {
     QVector<double> cells,temp;
     const int nCells=data_.hasSummary?data_.cellCount:(demo_?data_.cellCount:0);
     const int nTemps=data_.hasSummary?data_.temperatureCount:(demo_?data_.temperatureCount:0);
+    // The overview is a fixed 24-cell dashboard. Preserve 24 positions
+    // even when some cell frames have not arrived; do not show cells 25+.
+    QVector<double> overviewCells(24, -999.0);
+    for(int i=0;i<qMin(24,nCells);++i)
+        overviewCells[i]=data_.cells[i];
+    // Detailed cell-voltage page retains the full protocol capacity.
     for(int i=0;i<nCells;++i)cells<<data_.cells[i];
     for(int i=0;i<nTemps;++i)temp<< (data_.temperatures[i]==-999?-999.0:double(data_.temperatures[i]));
-    graphs_[3]->setSeries({cells},{blue});
+    graphs_[3]->setSeries({overviewCells},{blue});
     graphs_[4]->setSeries({temp},{green});
     graphs_[5]->setSeries({cells},{blue});
     graphs_[6]->setSeries({temp},{green});
