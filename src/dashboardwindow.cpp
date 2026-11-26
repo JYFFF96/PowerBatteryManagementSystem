@@ -214,19 +214,28 @@ void DashboardWindow::setupUi() {
     hl->addWidget(label(QStringLiteral("v1.0 · TKB BMS CAN 协议"),"muted"));
     hl->addStretch();
     hl->addWidget(label(QStringLiteral("适配器"),"muted"));
-    adapterBox_=new QComboBox; adapterBox_->addItem(QStringLiteral("周立功 USBCAN-II"),4);
+    adapterBox_=new QComboBox; adapterBox_->addItem(QStringLiteral("USBCAN-II"),4);
     adapterBox_->setMinimumWidth(146);hl->addWidget(adapterBox_);
     hl->addWidget(label(QStringLiteral("设备"),"muted"));
-    deviceIndex_=new QSpinBox;deviceIndex_->setRange(0,15);deviceIndex_->setFixedWidth(54);hl->addWidget(deviceIndex_);
+    deviceIndex_=new QComboBox;
+    for (int i=0;i<3;++i) deviceIndex_->addItem(QString::number(i),i);
+    deviceIndex_->setCurrentIndex(0);
+    deviceIndex_->setMinimumWidth(58);hl->addWidget(deviceIndex_);
     hl->addWidget(label(QStringLiteral("通道"),"muted"));
-    channelBox_=new QComboBox;channelBox_->addItems({QStringLiteral("CAN 0"),QStringLiteral("CAN 1")});
+    channelBox_=new QComboBox;
+    channelBox_->addItem(QStringLiteral("CAN 1"),0); // UI 1-based, driver 0-based
+    channelBox_->addItem(QStringLiteral("CAN 2"),1);
+    channelBox_->setCurrentIndex(0);
     channelBox_->setMinimumWidth(100);hl->addWidget(channelBox_);
     hl->addWidget(label(QStringLiteral("波特率"),"muted"));
-    baudBox_=new QComboBox;baudBox_->addItem(QStringLiteral("250 kbps"));
-    baudBox_->setToolTip(QStringLiteral("TKB V1.1 协议规定为 250 kbps"));hl->addWidget(baudBox_);
-    connectButton_=button(QStringLiteral("连接 CAN"),"danger");hl->addWidget(connectButton_);
+    baudBox_=new QComboBox;
+    baudBox_->addItem(QStringLiteral("250 kbps"),250);
+    baudBox_->addItem(QStringLiteral("500 kbps"),500);
+    baudBox_->setCurrentIndex(0);
+    baudBox_->setToolTip(QStringLiteral("TKB V1.1 默认 250 kbps；500 kbps 供硬件配置测试"));hl->addWidget(baudBox_);
+    connectButton_=button(QStringLiteral("● 开始连接"),"primary");hl->addWidget(connectButton_);
     demoButton_=button(QStringLiteral("启动模拟"),"primary");hl->addWidget(demoButton_);
-    connection_=label(QStringLiteral("● 未连接"));hl->addWidget(connection_);
+    connection_=label(QStringLiteral("● 已断开"));hl->addWidget(connection_);
     outer->addWidget(top);
 
     auto *body=new QHBoxLayout;body->setSpacing(0);body->setContentsMargins(0,0,0,0);
@@ -521,21 +530,21 @@ QWidget *DashboardWindow::createSettings() {
 void DashboardWindow::toggleCan() {
     if(can_->connected()) {
         can_->close();protocol_.reset();data_=BmsState{};lastReceiveMs_=-1;
-        connectButton_->setText(QStringLiteral("连接 CAN"));
-        adapterBox_->setEnabled(true);channelBox_->setEnabled(true);deviceIndex_->setEnabled(true);
+        adapterBox_->setEnabled(true);channelBox_->setEnabled(true);
+        deviceIndex_->setEnabled(true);baudBox_->setEnabled(true);
         updateConnectionText();refreshUi();return;
     }
     stopDemo();
     protocol_.reset();data_=BmsState{};refreshUi();
     QString error;
-    if(!can_->open(adapterBox_->currentData().toInt(),deviceIndex_->value(),channelBox_->currentIndex(),&error)) {
+    if(!can_->open(adapterBox_->currentData().toInt(),deviceIndex_->currentData().toInt(),channelBox_->currentData().toInt(),baudBox_->currentData().toInt(),&error)) {
         QMessageBox::warning(this,QStringLiteral("CAN 连接失败"),error+
             QStringLiteral("\n确认同目录有对应架构的 ControlCAN.dll，并已安装驱动。"));
         updateConnectionText();return;
     }
     protocol_.reset();data_=BmsState{};lastReceiveMs_=-1;
-    connectButton_->setText(QStringLiteral("断开 CAN"));
-    adapterBox_->setEnabled(false);channelBox_->setEnabled(false);deviceIndex_->setEnabled(false);
+    adapterBox_->setEnabled(false);channelBox_->setEnabled(false);
+    deviceIndex_->setEnabled(false);baudBox_->setEnabled(false);
     updateConnectionText();refreshUi();
 }
 void DashboardWindow::startDemo() {
@@ -551,20 +560,22 @@ void DashboardWindow::stopDemo() {
     updateConnectionText();
 }
 void DashboardWindow::updateConnectionText() {
-    if(can_&&can_->connected()) {
-        const bool fresh=lastReceiveMs_>=0 && clock_.elapsed()-lastReceiveMs_<2500;
-        connection_->setText(fresh?QStringLiteral("● 正在接收"):QStringLiteral("● 已连接 · 等待报文"));
-        connection_->setStyleSheet(fresh?"color:#55cd90;":"color:#f5be43;");
+    if (can_ && can_->connected()) {
+        connectButton_->setText(QStringLiteral("● 断开连接"));
+        connectButton_->setObjectName("danger");
+        connection_->setText(QStringLiteral("● 已连接"));
+        connection_->setStyleSheet("color:#55cd90;");
         demoButton_->setEnabled(false);
-    }else if(demo_) {
-        connection_->setText(QStringLiteral("● 模拟运行"));
-        connection_->setStyleSheet("color:#5ab5ff;");
-        demoButton_->setEnabled(true);
-    }else {
-        connection_->setText(QStringLiteral("● 未连接"));
-        connection_->setStyleSheet("color:#8fa1b8;");
+    } else {
+        connectButton_->setText(QStringLiteral("● 开始连接"));
+        connectButton_->setObjectName("primary");
+        connection_->setText(QStringLiteral("● 已断开"));
+        connection_->setStyleSheet("color:#ed645d;");
         demoButton_->setEnabled(true);
     }
+    // Qt style sheets need repolish when the button's objectName changes.
+    connectButton_->style()->unpolish(connectButton_);
+    connectButton_->style()->polish(connectButton_);
 }
 void DashboardWindow::demoTick() {
     if(!demo_)return;
