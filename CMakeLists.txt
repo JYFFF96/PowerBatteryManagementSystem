@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets PrintSupport)
 
 qt_add_executable(PowerBatteryManagementSystem
     src/main.cpp
@@ -15,9 +15,12 @@ qt_add_executable(PowerBatteryManagementSystem
     src/bmsprotocol.cpp
     src/canadapter.h
     src/canadapter.cpp
+    thirdparty/qcustomplot/qcustomplot.h
+    thirdparty/qcustomplot/qcustomplot.cpp
 )
 
-target_link_libraries(PowerBatteryManagementSystem PRIVATE Qt6::Widgets)
+target_link_libraries(PowerBatteryManagementSystem PRIVATE Qt6::Widgets Qt6::PrintSupport)
+target_include_directories(PowerBatteryManagementSystem PRIVATE thirdparty/qcustomplot)
 set_target_properties(PowerBatteryManagementSystem PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
