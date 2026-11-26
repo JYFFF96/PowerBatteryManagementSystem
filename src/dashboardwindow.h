@@ -68,6 +68,10 @@ private:
     int maxFrames_ = 2000;
     QVector<QStringList> captured_;
     QVector<QVector<double>> trends_;
+    QVector<double> timestamps_;
+    bool graphsDirty_ = true;
+    bool liveDataDirty_ = false;
+    qint64 lastSampleMs_ = -500;
     QVector<GraphWidget *> graphs_;
     QVector<QPushButton *> navButtons_;
     QVector<QLabel *> overviewValues_;
