@@ -9,7 +9,7 @@ CanAdapter::CanAdapter(QObject *parent) : QThread(parent)
 
 CanAdapter::~CanAdapter() { close(); }
 
-bool CanAdapter::open(int deviceType, int deviceIndex, int channel, QString *error)
+bool CanAdapter::open(int deviceType, int deviceIndex, int channel, int baudKbps, QString *error)
 {
     close();
 #ifndef Q_OS_WIN
@@ -44,8 +44,18 @@ bool CanAdapter::open(int deviceType, int deviceIndex, int channel, QString *err
     cfg.accCode = 0;
     cfg.accMask = 0xFFFFFFFFu;
     cfg.filter = 1;
-    cfg.timing0 = 0x01; // 250 kbps, from mmWaveRadar
-    cfg.timing1 = 0x1C;
+    if (baudKbps == 250) {
+        cfg.timing0 = 0x01;
+        cfg.timing1 = 0x1C;
+    } else if (baudKbps == 500) {
+        cfg.timing0 = 0x00;
+        cfg.timing1 = 0x1C;
+    } else {
+        closeFn_(deviceType_, deviceIndex_);
+        library_.unload();
+        if (error) *error = QStringLiteral("不支持的CAN波特率");
+        return false;
+    }
     cfg.mode = 0; // normal receiving mode
     if (initFn_(deviceType_, deviceIndex_, channel_, &cfg) != 1 ||
         startFn_(deviceType_, deviceIndex_, channel_) != 1) {
