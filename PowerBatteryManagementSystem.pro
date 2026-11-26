@@ -1,4 +1,4 @@
-QT += core gui widgets
+QT += core gui widgets printsupport
 
 TEMPLATE = app
 TARGET = PowerBatteryManagementSystem
@@ -9,14 +9,16 @@ SOURCES += \
     src/main.cpp \
     src/dashboardwindow.cpp \
     src/bmsprotocol.cpp \
-    src/canadapter.cpp
+    src/canadapter.cpp \
+    thirdparty/qcustomplot/qcustomplot.cpp
 
 HEADERS += \
     src/dashboardwindow.h \
     src/bmsprotocol.h \
-    src/canadapter.h
+    src/canadapter.h \
+    thirdparty/qcustomplot/qcustomplot.h
 
-INCLUDEPATH += $$PWD/src
+INCLUDEPATH += $PWD/src $PWD/thirdparty/qcustomplot
 
 win32 {
     CONFIG(debug, debug|release) {
