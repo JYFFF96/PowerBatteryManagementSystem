@@ -71,6 +71,7 @@ private:
     QVector<GraphWidget *> graphs_;
     QVector<QPushButton *> navButtons_;
     QVector<QLabel *> overviewValues_;
+    QVector<QLabel *> overviewUnits_;
     QVector<QLabel *> overviewNotes_;
     QVector<QLabel *> cellValues_;
     QVector<QLabel *> faultCounts_;
