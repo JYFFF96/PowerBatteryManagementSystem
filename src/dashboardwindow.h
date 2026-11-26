@@ -89,7 +89,7 @@ private:
     QComboBox *adapterBox_ = nullptr;
     QComboBox *channelBox_ = nullptr;
     QComboBox *baudBox_ = nullptr;
-    QSpinBox *deviceIndex_ = nullptr;
+    QComboBox *deviceIndex_ = nullptr;
     QSpinBox *cellCount_ = nullptr;
     QSpinBox *tempCount_ = nullptr;
     QSpinBox *recordLimit_ = nullptr;
