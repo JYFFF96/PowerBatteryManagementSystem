@@ -387,7 +387,7 @@ QWidget *DashboardWindow::createFaults() {
 
 QWidget *DashboardWindow::createWaveforms() {
     auto *w=new QWidget;auto *l=vertical(w,14);
-    auto *toolbar=new QHBoxLayout;toolbar->addWidget(label(QStringLiteral("实时波形 · 总电压 / 电流原始值 / SOC / 单体极值"),"sectionTitle"));
+    auto *toolbar=new QHBoxLayout;toolbar->addWidget(label(QStringLiteral("实时波形 · 总电压 / 电流 / SOC / 单体极值"),"sectionTitle"));
     toolbar->addStretch();
     auto *pause=button(QStringLiteral("暂停"));auto *clear=button(QStringLiteral("清除曲线"));
     toolbar->addWidget(pause);toolbar->addWidget(clear);l->addLayout(toolbar);
@@ -761,13 +761,13 @@ void DashboardWindow::refreshUi() {
     overviewNotes_[0]->setText(nominalText);
     overviewNotes_[0]->setStyleSheet("color:#b977ff;font-size:11px;");
 
-    // The vendor's abridged protocol does not specify current signed encoding.
-    overviewValues_[1]->setText(data_.hasStatus?n(data_.currentRawAmps,2)+QStringLiteral(" A*"):QStringLiteral("--"));
+    // Show the unsigned raw value * 0.1 A; charge/discharge direction comes from the separate state field.
+    overviewValues_[1]->setText(data_.hasStatus?n(data_.currentRawAmps,2)+QStringLiteral(" A"):QStringLiteral("--"));
     const QString direction=data_.chargeState==1?QStringLiteral("充电中"):
         data_.chargeState==2?QStringLiteral("放电中"):
         data_.chargeState==0?QStringLiteral("空闲"):QStringLiteral("状态未知");
     overviewNotes_[1]->setText(data_.hasStatus
-        ?direction+QStringLiteral(" · 原始 %1 A（符号待确认）").arg(n(data_.currentRawAmps,2))
+        ?direction+QStringLiteral(" · %1 A").arg(n(data_.currentRawAmps,2))
         :QStringLiteral("等待电流/状态报文"));
     overviewNotes_[1]->setStyleSheet(QStringLiteral("color:%1;font-size:11px;")
         .arg(data_.chargeState==1?"#53c98c":data_.chargeState==2?"#f5be43":"#7a91ad"));
