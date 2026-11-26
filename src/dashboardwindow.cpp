@@ -135,6 +135,8 @@ public:
         // In one hour at 2 Hz, at most ~7200 time samples are in memory.
         const double newest=times.last();
         const double cutoff=newest-3600.0;
+        const double span=qMin(3600.0,qMax(60.0,newest-times.first()));
+        xAxis->setRange(newest-span,newest);
         for(int k=0;k<series.size();++k) {
             const int maxCount=qMin(times.size(),series[k].size());
             for(int i=0;i<maxCount;++i) {
@@ -147,8 +149,6 @@ public:
             graph(k)->rescaleValueAxis(false,true);
         }
         lastKey_=newest;lastCount_=times.size();
-        double span=qMin(3600.0,qMax(60.0,newest-times.first()));
-        xAxis->setRange(newest-span,newest);
         if(series.size()==2) {
             yAxis2->setVisible(true);
             yAxis2->setTickLabelColor(QColor("#f5be43"));
@@ -879,7 +879,7 @@ void DashboardWindow::refreshUi() {
             .arg(secs/60,2,10,QChar('0')).arg(secs%60,2,10,QChar('0')));
     }
     if(overviewValues_.size()!=6 || overviewNotes_.size()!=6 || overviewUnits_.size()!=6)return;
-    if(!displayDirty_ && !demo_ && !liveDataDirty_ && !graphsDirty_)return;
+    if(!displayDirty_ && !demo_ && !graphsDirty_)return;
     displayDirty_=false;
     const int numCells=data_.hasSummary?data_.cellCount:0;
     const int numTemps=data_.hasSummary?data_.temperatureCount:0;
@@ -997,7 +997,6 @@ void DashboardWindow::refreshUi() {
         }
     }
     updateFaults();updateGraphs();
-    if(can_ && can_->connected())liveDataDirty_=false;
     if(recordingValues_.size()==4) {
         recordingValues_[0]->setText(recording_?QStringLiteral("录制中"):QStringLiteral("已停止"));
         recordingValues_[1]->setText(QString::number(recordedCount_)+QStringLiteral(" 帧"));
