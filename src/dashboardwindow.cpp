@@ -865,6 +865,15 @@ void DashboardWindow::updateFaults() {
 void DashboardWindow::refreshUi() {
     updateConnectionText();
     const qint64 nowMs=clock_.elapsed();
+    // Expire samples even if reception stops or the waveform is paused.
+    const double cutoff=QDateTime::currentMSecsSinceEpoch()/1000.0-3600.0;
+    int expired=0;
+    while(expired<timestamps_.size() && timestamps_[expired]<cutoff)++expired;
+    if(expired>0) {
+        timestamps_.remove(0,expired);
+        for(auto &series:trends_)series.remove(0,expired);
+        graphsDirty_=true;
+    }
     if(can_ && can_->connected() && liveDataDirty_ && nowMs-lastSampleMs_>=500) {
         liveDataDirty_=false;
         lastSampleMs_=nowMs;
