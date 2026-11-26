@@ -294,14 +294,18 @@ void DashboardWindow::switchPage(int index) {
 
 QWidget *DashboardWindow::createOverview() {
     auto *w=new QWidget;auto *l=vertical(w,14);auto *grid=new QGridLayout;
-    const QStringList titles={QStringLiteral("总电压"),QStringLiteral("电流 (原始值)"),
+    const QStringList titles={QStringLiteral("总电压"),QStringLiteral("电流"),
         QStringLiteral("SOC 电量"),QStringLiteral("SOH 健康度"),QStringLiteral("充放电状态"),
-        QStringLiteral("单体压差 ΔV")};
+        QStringLiteral("单体压差 (ΔV)")};
     const QStringList roles={"metricBlue","metricYellow","metricPurple","metricGreen","metricValue","metricYellow"};
     for(int i=0;i<titles.size();++i) {
         auto *card=new QFrame;card->setObjectName("panel");auto *cl=vertical(card,12);
         cl->addWidget(label(titles[i],"muted"));auto *v=label("--",roles[i]);overviewValues_<<v;
-        cl->addWidget(v);cl->addWidget(label(QStringLiteral("TKB BMS · CAN 数据"),"muted"));
+        cl->addWidget(v);
+        auto *note=label(QStringLiteral("--"),"muted");
+        note->setWordWrap(true);
+        overviewNotes_<<note;
+        cl->addWidget(note);
         grid->addWidget(card,i/5,i%5);
     }
     l->addLayout(grid);
@@ -741,21 +745,77 @@ void DashboardWindow::refreshUi() {
         footerValues_[2]->setText(QStringLiteral("运行时间: %1:%2")
             .arg(secs/60,2,10,QChar('0')).arg(secs%60,2,10,QChar('0')));
     }
-    if(overviewValues_.size()!=6)return;
-    overviewValues_[0]->setText(data_.hasSummary?n(data_.packVoltage)+QStringLiteral(" V"):QStringLiteral("--"));
-    overviewValues_[1]->setText(data_.hasStatus?n(data_.currentRawAmps)+QStringLiteral(" A*"):QStringLiteral("--"));
-    overviewValues_[2]->setText(data_.hasStatus?QString::number(data_.soc)+QStringLiteral(" %"):QStringLiteral("--"));
-    overviewValues_[3]->setText(data_.hasStatus?QString::number(data_.soh)+QStringLiteral(" %"):QStringLiteral("--"));
-    overviewValues_[4]->setText(data_.hasStatus?(data_.chargeState==0?QStringLiteral("静态"):data_.chargeState==1?QStringLiteral("充电"):data_.chargeState==2?QStringLiteral("放电"):QStringLiteral("未知")):QStringLiteral("--"));
-    overviewValues_[5]->setText(data_.hasCellExtremes?n((data_.maxCellVoltage-data_.minCellVoltage)*1000,1)+QStringLiteral(" mV"):QStringLiteral("--"));
-
+    if(overviewValues_.size()!=6 || overviewNotes_.size()!=6)return;
     const int numCells=data_.hasSummary?data_.cellCount:0;
     const int numTemps=data_.hasSummary?data_.temperatureCount:0;
-    double sum=0;int count=0;double maxV=-1,minV=1e9;
+    double sum=0;int count=0;
     for(int i=0;i<numCells;++i)if(data_.cells[i]>=0) {
-        const double v=data_.cells[i];++count;sum+=v;maxV=qMax(maxV,v);minV=qMin(minV,v);
+        sum+=data_.cells[i];++count;
     }
     const double avg=count?sum/count:0;
+
+    // Reference pack specification is 24 x 3.2 V; not a BMS-reported nominal voltage.
+    const QString nominalText=QStringLiteral("标称 76.8V (24×3.2V) · 均值 %1")
+        .arg(count?n(avg,2)+QStringLiteral(" V"):QStringLiteral("--"));
+    overviewValues_[0]->setText(data_.hasSummary?n(data_.packVoltage,2)+QStringLiteral(" V"):QStringLiteral("--"));
+    overviewNotes_[0]->setText(nominalText);
+    overviewNotes_[0]->setStyleSheet("color:#b977ff;font-size:11px;");
+
+    // The vendor's abridged protocol does not specify current signed encoding.
+    overviewValues_[1]->setText(data_.hasStatus?n(data_.currentRawAmps,2)+QStringLiteral(" A*"):QStringLiteral("--"));
+    const QString direction=data_.chargeState==1?QStringLiteral("充电中"):
+        data_.chargeState==2?QStringLiteral("放电中"):
+        data_.chargeState==0?QStringLiteral("空闲"):QStringLiteral("状态未知");
+    overviewNotes_[1]->setText(data_.hasStatus
+        ?direction+QStringLiteral(" · 原始 %1 A（符号待确认）").arg(n(data_.currentRawAmps,2))
+        :QStringLiteral("等待电流/状态报文"));
+    overviewNotes_[1]->setStyleSheet(QStringLiteral("color:%1;font-size:11px;")
+        .arg(data_.chargeState==1?"#53c98c":data_.chargeState==2?"#f5be43":"#7a91ad"));
+
+    overviewValues_[2]->setText(data_.hasStatus?n(data_.soc,2)+QStringLiteral(" %"):QStringLiteral("--"));
+    // Neither estimated range nor vehicle energy consumption is in this protocol.
+    overviewNotes_[2]->setText(data_.hasStatus
+        ?QStringLiteral("SOH %1% · 续航约 -- km（未提供）").arg(data_.soh)
+        :QStringLiteral("SOH -- · 续航约 -- km"));
+    overviewNotes_[2]->setStyleSheet("color:#b977ff;font-size:11px;");
+
+    overviewValues_[3]->setText(data_.hasStatus?QString::number(data_.soh)+QStringLiteral(" %"):QStringLiteral("--"));
+    const QString health=!data_.hasStatus?QStringLiteral("--"):
+        data_.soh>=95?QStringLiteral("优秀"):
+        data_.soh>=85?QStringLiteral("良好"):QStringLiteral("一般");
+    overviewNotes_[3]->setText(QStringLiteral("%1 · 循环 -- 次（协议未提供）").arg(health));
+    overviewNotes_[3]->setStyleSheet("color:#71839c;font-size:11px;");
+
+    // Charge/discharge indication is based on BYTE3 state, not on unsigned current.
+    QString state=QStringLiteral("未知");
+    QString color=QStringLiteral("#7a91ad");
+    if(data_.hasStatus) {
+        if(data_.chargeState==0){state=QStringLiteral("空闲");color="#8797ab";}
+        else if(data_.chargeState==1){state=QStringLiteral("充电");color="#53c98c";}
+        else if(data_.chargeState==2){state=QStringLiteral("放电");color="#f5be43";}
+    }
+    overviewValues_[4]->setText(QStringLiteral("● ")+state);
+    overviewValues_[4]->setStyleSheet(QStringLiteral("font-size:21px;font-weight:700;color:%1;").arg(color));
+
+    // The fault byte reports 13 known fields with level 1/2/3, not trip counts.
+    int severe=0;
+    for(const QString &fault:data_.faults) {
+        if(fault.contains(QStringLiteral("（3级）")))++severe;
+    }
+    overviewNotes_[4]->setText(data_.hasFaultFrame
+        ?QStringLiteral("三级故障：%1 项 / 当前故障 %2 项").arg(severe).arg(data_.faults.size())
+        :QStringLiteral("三级故障：-- / 当前故障 --"));
+    overviewNotes_[4]->setStyleSheet("color:#71839c;font-size:11px;");
+
+    overviewValues_[5]->setText(data_.hasCellExtremes
+        ?n((data_.maxCellVoltage-data_.minCellVoltage)*1000,2)+QStringLiteral(" mV")
+        :QStringLiteral("--"));
+    overviewNotes_[5]->setText(data_.hasCellExtremes
+        ?QStringLiteral("%1 V (最高) - %2 V (最低) · 阈值 %3mV")
+            .arg(n(data_.maxCellVoltage,2)).arg(n(data_.minCellVoltage,2))
+            .arg(QStringLiteral("50"))
+        :QStringLiteral("最高 -- / 最低 -- · 阈值 50mV"));
+    overviewNotes_[5]->setStyleSheet("color:#b977ff;font-size:11px;");
     const bool cellExt=data_.hasCellExtremes;
     const QStringList cv={cellExt?n(data_.maxCellVoltage,3)+QStringLiteral(" V"):QStringLiteral("--"),
         cellExt?n(data_.minCellVoltage,3)+QStringLiteral(" V"):QStringLiteral("--"),
