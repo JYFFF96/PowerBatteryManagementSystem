@@ -1,5 +1,5 @@
 #include "dashboardwindow.h"
-#include "qcustomplot.h"
+#include "../thirdparty/qcustomplot/qcustomplot.h"
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
