@@ -11,6 +11,8 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QHeaderView>
+#include <QIcon>
+#include <QPixmap>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -326,7 +328,7 @@ void DashboardWindow::setupUi() {
         QPushButton:disabled {color:#607087;background:#1a222e;}
         QPushButton#primary {background:#347bbd;color:white;border-color:#448ecc;}
         QPushButton#danger {background:#68272a;color:white;border-color:#bf4649;}
-        QPushButton#nav {text-align:left;background:transparent;border:0;padding:12px 15px;color:#c5d2e5;}
+        QPushButton#nav {text-align:left;background:transparent;border:0;padding:10px 13px;color:#c5d2e5;}
         QPushButton#nav:hover {background:#1b2b40;}
         QPushButton#nav[active="true"] {background:#1d2d43;border:1px solid #32516d;color:#67baff;}
         QComboBox,QSpinBox,QDoubleSpinBox,QLineEdit {background:#1a2433;border:1px solid #3b4d66;
@@ -383,7 +385,24 @@ void DashboardWindow::setupUi() {
     for(int i=0;i<9;++i) {
         if(i==0||i==4||i==7||i==8)
             sl->addWidget(label(i==0?QStringLiteral("监控"):i==4?QStringLiteral("数据"):i==7?QStringLiteral("命令"):QStringLiteral("配置"),"muted"));
-        auto *btn=button(QString::fromUtf8(navs[i].glyph)+"  "+QString::fromUtf8(navs[i].text),"nav");
+        // Do not prepend Unicode glyphs to the label: different glyph widths
+        // shift the text. Render every icon into the same fixed-size pixmap.
+        auto *btn=button(QString::fromUtf8(navs[i].text),"nav");
+        QPixmap iconPixmap(20,20);
+        iconPixmap.fill(Qt::transparent);
+        {
+            QPainter painter(&iconPixmap);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setRenderHint(QPainter::TextAntialiasing);
+            painter.setPen(QColor("#8fbce8"));
+            QFont iconFont(QStringLiteral("Segoe UI Symbol"));
+            iconFont.setPixelSize(16);
+            painter.setFont(iconFont);
+            painter.drawText(iconPixmap.rect(),Qt::AlignCenter,QString::fromUtf8(navs[i].glyph));
+        }
+        btn->setIcon(QIcon(iconPixmap));
+        btn->setIconSize(QSize(20,20));
+        btn->setMinimumHeight(42);
         btn->setProperty("active",i==0);
         sl->addWidget(btn);navButtons_<<btn;
         connect(btn,&QPushButton::clicked,this,[this,i]{switchPage(i);});
