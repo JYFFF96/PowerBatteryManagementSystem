@@ -617,8 +617,8 @@ QWidget *DashboardWindow::createWaveforms() {
     header->addWidget(label(QStringLiteral("实时趋势 · 最近 2 小时"),"sectionTitle"));
     header->addStretch(1);
     const QStringList names={
-        QStringLiteral("总电压"),QStringLiteral("电流"),QStringLiteral("SOC"),
-        QStringLiteral("最高电压"),QStringLiteral("最低电压")
+        QStringLiteral("总电压 (V)"),QStringLiteral("电流 (A)"),QStringLiteral("SOC (%)"),
+        QStringLiteral("最高电压 (V)"),QStringLiteral("最低电压 (V)")
     };
     const QVector<QColor> colors={blue,yellow,purple,green,red};
     for(int i=0;i<names.size();++i) {
