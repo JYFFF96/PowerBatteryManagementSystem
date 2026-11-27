@@ -97,23 +97,17 @@ public:
             xAxis->setTickLabelRotation(0);
             xAxis->setRange(QDateTime::currentMSecsSinceEpoch()/1000.0-60,
                             QDateTime::currentMSecsSinceEpoch()/1000.0);
-            // Put the legend in a separate layout row, below the time axis.
-            // This avoids covering the curve and keeps all three panels aligned.
-            axisRect()->insetLayout()->take(legend);
-            plotLayout()->insertRow(1);
-            plotLayout()->addElement(1,0,legend);
-            plotLayout()->setRowSpacing(2);
-            legend->setVisible(true);
+            // Overview charts use compact external legend strips, above the axes.
+            // Keep QCustomPlot's built-in legend hidden unless explicitly enabled.
+            legend->setVisible(false);
             legend->setBrush(QBrush(QColor("#0b1017")));
             legend->setBorderPen(Qt::NoPen);
             legend->setTextColor(QColor("#bacce3"));
-            legend->setFont(QFont(QStringLiteral("Microsoft YaHei"),9));
-            legend->setIconSize(16,8);
-            legend->setIconTextPadding(5);
-            legend->setColumnSpacing(14);
+            legend->setFont(QFont(QStringLiteral("Microsoft YaHei"),8));
+            legend->setIconSize(14,7);
+            legend->setIconTextPadding(4);
+            legend->setColumnSpacing(10);
             legend->setRowSpacing(0);
-            legend->setFillOrder(QCPLayoutGrid::foColumnsFirst);
-            legend->setWrap(1);
         } else {
             auto ticker=QSharedPointer<QCPAxisTickerText>(new QCPAxisTickerText);
             xAxis->setTicker(ticker);
@@ -124,6 +118,17 @@ public:
                 barsSeries_.append(bar);
             }
         }
+    }
+
+    void enableBuiltInLegend() {
+        // Only the full-screen waveform view uses the legend below the plot.
+        if (legend->visible())return;
+        axisRect()->insetLayout()->take(legend);
+        plotLayout()->insertRow(1);
+        plotLayout()->addElement(1,0,legend);
+        legend->setVisible(true);
+        legend->setFillOrder(QCPLayoutGrid::foColumnsFirst);
+        legend->setWrap(2);
     }
 
     void setTimeSeries(const QVector<double> &times,
@@ -421,14 +426,46 @@ QWidget *DashboardWindow::createOverview() {
         grid->addWidget(card,i/5,i%5);
     }
     l->addLayout(grid);
-    auto *charts=new QHBoxLayout;
-    charts->setSpacing(12);
-    for(const auto &name:{QStringLiteral("总电压 / 电流实时波形"),QStringLiteral("SOC / SOH"),
-                           QStringLiteral("最大 / 最小单体电压")}) {
-        auto *g=new GraphWidget(false); graphs_<<g;
-        charts->addWidget(panel(name,g),1);
+    // One shared panel title. Each graph gets a compact, right-aligned
+    // legend strip above its axes, without covering the curves or time ticks.
+    auto *chartsContent=new QWidget;
+    auto *charts=new QHBoxLayout(chartsContent);
+    charts->setContentsMargins(0,0,0,0);
+    charts->setSpacing(10);
+    const QStringList legendNames[3]={
+        {QStringLiteral("总电压"),QStringLiteral("电流")},
+        {QStringLiteral("SOC"),QStringLiteral("SOH")},
+        {QStringLiteral("最高电压"),QStringLiteral("最低电压")}
+    };
+    const QVector<QColor> legendColors[3]={
+        {blue,yellow},{purple,green},{red,blue}
+    };
+    for(int i=0;i<3;++i) {
+        auto *part=new QWidget;
+        auto *partLayout=new QVBoxLayout(part);
+        partLayout->setContentsMargins(0,0,0,0);
+        partLayout->setSpacing(4);
+        auto *legendRow=new QHBoxLayout;
+        legendRow->setContentsMargins(3,0,7,0);
+        legendRow->setSpacing(10);
+        legendRow->addStretch();
+        for(int j=0;j<legendNames[i].size();++j) {
+            auto *line=new QFrame;
+            line->setFixedSize(15,2);
+            line->setStyleSheet(QStringLiteral("background:%1;border:none;")
+                                .arg(legendColors[i][j].name()));
+            legendRow->addWidget(line,0,Qt::AlignVCenter);
+            auto *caption=label(legendNames[i][j]);
+            caption->setStyleSheet("font-size:10px;color:#9eb0c8;");
+            legendRow->addWidget(caption,0,Qt::AlignVCenter);
+        }
+        partLayout->addLayout(legendRow);
+        auto *g=new GraphWidget(false);
+        graphs_<<g;
+        partLayout->addWidget(g,1);
+        charts->addWidget(part,1);
     }
-    l->addLayout(charts,2);
+    l->addWidget(panel(QStringLiteral("实时数据波形"),chartsContent),2);
     auto *bottom=new QHBoxLayout;
     auto *vg=new GraphWidget(true);graphs_<<vg;
     auto *tg=new GraphWidget(true);graphs_<<tg;
@@ -504,7 +541,7 @@ QWidget *DashboardWindow::createWaveforms() {
     toolbar->addStretch();
     auto *pause=button(QStringLiteral("暂停"));auto *clear=button(QStringLiteral("清除曲线"));
     toolbar->addWidget(pause);toolbar->addWidget(clear);l->addLayout(toolbar);
-    auto *g=new GraphWidget(false);graphs_<<g;
+    auto *g=new GraphWidget(false);g->enableBuiltInLegend();graphs_<<g;
     l->addWidget(panel(QStringLiteral("实时趋势 · 采样周期 500 ms（演示）/ 实时 CAN 数据"),g),1);
     connect(pause,&QPushButton::clicked,this,[this,pause]{
         waveformPaused_=!waveformPaused_;
