@@ -131,6 +131,8 @@ public:
         legend->setWrap(2);
     }
 
+    void setDualAxis(bool dual) { dualAxis_=dual; }
+
     void setTimeSeries(const QVector<double> &times,
                        const QVector<QVector<double>> &series,
                        const QVector<QColor> &colors,
@@ -140,7 +142,7 @@ public:
             clearGraphs();
             for(int i=0;i<series.size();++i) {
                 QCPAxis *axis=yAxis;
-                if(series.size()==2 && i==1)axis=yAxis2;
+                if(dualAxis_ && i==1)axis=yAxis2;
                 auto *g=addGraph(xAxis,axis);
                 g->setPen(QPen(colors.isEmpty()?QColor("#5ab5ff"):colors[i%colors.size()],1.6));
                 g->setAdaptiveSampling(true);
@@ -170,20 +172,35 @@ public:
                     graph(k)->addData(times[i],value);
             }
             graph(k)->data()->removeBefore(cutoff);
-            graph(k)->rescaleValueAxis(false,true);
         }
         lastKey_=newest;lastCount_=times.size();
-        if(series.size()==2) {
-            yAxis2->setVisible(true);
-            yAxis2->setTickLabelColor(QColor("#f5be43"));
-            yAxis2->setBasePen(QPen(QColor("#334155")));
+        // Use a secondary Y axis only for unlike units (volts vs amps).
+        // SOC/SOH and cell min/max share the left axis, avoiding duplicate scales.
+        yAxis2->setVisible(dualAxis_ && series.size()>1);
+        yAxis2->setNumberFormat("f");
+        yAxis2->setNumberPrecision(dualAxis_?1:2);
+        yAxis2->setTickLabelColor(colors.size()>1?colors[1]:QColor("#8597b0"));
+        yAxis2->setBasePen(QPen(QColor("#334155")));
+        yAxis2->grid()->setVisible(false);
+
+        // Constant series (e.g. SOH=96) need a sensible non-zero axis range.
+        // Letting QCP auto-range a nearly constant series can create 10^11 ticks.
+        auto setRange=[&](QCPAxis *axis,int first,int last) {
+            double lo=1e100,hi=-1e100;
+            for(int k=first;k<last && k<series.size();++k)
+                for(double value:series[k])
+                    if(std::isfinite(value) && value>-500) {
+                        lo=qMin(lo,value); hi=qMax(hi,value);
+                    }
+            if(lo>hi) { axis->setRange(0,1);return; }
+            const double margin=qMax((hi-lo)*0.08,qMax(0.05,qAbs(hi)*0.005));
+            axis->setRange(lo-margin,hi+margin);
+        };
+        if(dualAxis_ && series.size()>1) {
+            setRange(yAxis,0,1);
+            setRange(yAxis2,1,2);
         } else {
-            yAxis2->setVisible(false);
-        }
-        if (graphCount()) {
-            if(yAxis->range().size()<0.001)yAxis->scaleRange(1.1);
-            else yAxis->scaleRange(1.08);
-            if(series.size()==2)yAxis2->scaleRange(1.08);
+            setRange(yAxis,0,series.size());
         }
         replot(QCustomPlot::rpQueuedReplot);
     }
@@ -223,6 +240,7 @@ public:
     }
 private:
     bool bars_;
+    bool dualAxis_ = false;
     QVector<QCPBars*> barsSeries_;
     int lastCount_=0;
     double lastKey_=-1;
@@ -426,12 +444,14 @@ QWidget *DashboardWindow::createOverview() {
         grid->addWidget(card,i/5,i%5);
     }
     l->addLayout(grid);
-    // One shared panel title. Each graph gets a compact, right-aligned
-    // legend strip above its axes, without covering the curves or time ticks.
-    auto *chartsContent=new QWidget;
-    auto *charts=new QHBoxLayout(chartsContent);
-    charts->setContentsMargins(0,0,0,0);
-    charts->setSpacing(10);
+    // Independent cards, equal width. Title and compact legend share a row.
+    auto *charts=new QHBoxLayout;
+    charts->setSpacing(12);
+    const QStringList plotTitles={
+        QStringLiteral("总电压 / 电流实时波形"),
+        QStringLiteral("SOC / SOH"),
+        QStringLiteral("最高 / 最低单体电压")
+    };
     const QStringList legendNames[3]={
         {QStringLiteral("总电压"),QStringLiteral("电流")},
         {QStringLiteral("SOC"),QStringLiteral("SOH")},
@@ -441,31 +461,32 @@ QWidget *DashboardWindow::createOverview() {
         {blue,yellow},{purple,green},{red,blue}
     };
     for(int i=0;i<3;++i) {
-        auto *part=new QWidget;
-        auto *partLayout=new QVBoxLayout(part);
-        partLayout->setContentsMargins(0,0,0,0);
-        partLayout->setSpacing(4);
-        auto *legendRow=new QHBoxLayout;
-        legendRow->setContentsMargins(3,0,7,0);
-        legendRow->setSpacing(10);
-        legendRow->addStretch();
+        auto *card=new QFrame;
+        card->setObjectName("panel");
+        auto *cardLayout=vertical(card,10);
+        cardLayout->setSpacing(6);
+        auto *header=new QHBoxLayout;
+        header->setSpacing(7);
+        header->addWidget(label(plotTitles[i],"sectionTitle"));
+        header->addStretch(1);
         for(int j=0;j<legendNames[i].size();++j) {
             auto *line=new QFrame;
-            line->setFixedSize(15,2);
+            line->setFixedSize(13,2);
             line->setStyleSheet(QStringLiteral("background:%1;border:none;")
                                 .arg(legendColors[i][j].name()));
-            legendRow->addWidget(line,0,Qt::AlignVCenter);
+            header->addWidget(line,0,Qt::AlignVCenter);
             auto *caption=label(legendNames[i][j]);
             caption->setStyleSheet("font-size:10px;color:#9eb0c8;");
-            legendRow->addWidget(caption,0,Qt::AlignVCenter);
+            header->addWidget(caption,0,Qt::AlignVCenter);
         }
-        partLayout->addLayout(legendRow);
+        cardLayout->addLayout(header);
         auto *g=new GraphWidget(false);
+        g->setDualAxis(i==0);
         graphs_<<g;
-        partLayout->addWidget(g,1);
-        charts->addWidget(part,1);
+        cardLayout->addWidget(g,1);
+        charts->addWidget(card,1);
     }
-    l->addWidget(panel(QStringLiteral("实时数据波形"),chartsContent),2);
+    l->addLayout(charts,2);
     auto *bottom=new QHBoxLayout;
     auto *vg=new GraphWidget(true);graphs_<<vg;
     auto *tg=new GraphWidget(true);graphs_<<tg;
