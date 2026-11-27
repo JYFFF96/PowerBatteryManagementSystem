@@ -524,7 +524,9 @@ QWidget *DashboardWindow::createOverview() {
         }
         auto *remark=label(i==0
             ?QStringLiteral("过压 3.65V · 欠压 2.75V")
-            :QStringLiteral("仅显示前24路"));
+            :QStringLiteral("高温 55°C · 低温 -30°C"));
+        if(i==0)cellBarRemark_=remark;
+        else tempBarRemark_=remark;
         remark->setStyleSheet("font-size:10px;color:#71839c;");
         header->addSpacing(6);
         header->addWidget(remark,0,Qt::AlignVCenter);
@@ -1020,6 +1022,14 @@ void DashboardWindow::refreshUi() {
     displayDirty_=false;
     const int numCells=24;
     const int numTemps=24;
+    if(cellBarRemark_ && highVoltage_ && lowVoltage_)
+        cellBarRemark_->setText(QStringLiteral("过压 %1V · 欠压 %2V")
+            .arg(n(highVoltage_->value()/1000.0,2))
+            .arg(n(lowVoltage_->value()/1000.0,2)));
+    if(tempBarRemark_ && highTemperature_ && lowTemperature_)
+        tempBarRemark_->setText(QStringLiteral("高温 %1°C · 低温 %2°C")
+            .arg(n(highTemperature_->value(),0))
+            .arg(n(lowTemperature_->value(),0)));
     double sum=0;int count=0;
     for(int i=0;i<numCells;++i)if(data_.hasSummary && i<data_.cellCount && data_.cells[i]>=0) {
         sum+=data_.cells[i];++count;
