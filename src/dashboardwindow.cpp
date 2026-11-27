@@ -132,6 +132,7 @@ public:
     }
 
     void setDualAxis(bool dual) { dualAxis_=dual; }
+    void setHistoryWindow(double seconds) { historySeconds_=seconds; }
     // A value label is displayed below every bar instead of every other index.
     void setBarValueDecimals(int decimals) { barValueDecimals_=decimals; }
 
@@ -160,10 +161,10 @@ public:
             replot(QCustomPlot::rpQueuedReplot);
             return;
         }
-        // In one hour at 2 Hz, at most ~7200 time samples are in memory.
+        // Per-plot retention: overview 1h, waveform record 2h.
         const double newest=times.last();
-        const double cutoff=newest-3600.0;
-        const double span=qMin(3600.0,qMax(60.0,newest-times.first()));
+        const double cutoff=newest-historySeconds_;
+        const double span=qMin(historySeconds_,qMax(60.0,newest-times.first()));
         xAxis->setRange(newest-span,newest);
         for(int k=0;k<series.size();++k) {
             const int maxCount=qMin(times.size(),series[k].size());
@@ -251,6 +252,7 @@ public:
 private:
     bool bars_;
     bool dualAxis_ = false;
+    double historySeconds_=3600.0;
     int barValueDecimals_=2;
     QVector<QCPBars*> barsSeries_;
     int lastCount_=0;
@@ -602,13 +604,47 @@ QWidget *DashboardWindow::createFaults() {
 }
 
 QWidget *DashboardWindow::createWaveforms() {
-    auto *w=new QWidget;auto *l=vertical(w,14);
-    auto *toolbar=new QHBoxLayout;toolbar->addWidget(label(QStringLiteral("实时波形 · 总电压 / 电流 / SOC / 单体极值"),"sectionTitle"));
+    auto *w=new QWidget;
+    auto *l=vertical(w,14);
+
+    // One compact header row: plot title left, five inline legends in the middle,
+    // controls right. No legend is placed underneath the plotting area.
+    auto *chartCard=new QFrame;
+    chartCard->setObjectName("panel");
+    auto *cardLayout=vertical(chartCard,12);
+    auto *header=new QHBoxLayout;
+    header->setSpacing(10);
+    header->addWidget(label(QStringLiteral("实时趋势 · 最近 2 小时"),"sectionTitle"));
+    header->addStretch(1);
+    const QStringList names={
+        QStringLiteral("总电压"),QStringLiteral("电流"),QStringLiteral("SOC"),
+        QStringLiteral("最高电压"),QStringLiteral("最低电压")
+    };
+    const QVector<QColor> colors={blue,yellow,purple,green,red};
+    for(int i=0;i<names.size();++i) {
+        auto *line=new QFrame;
+        line->setFixedSize(14,2);
+        line->setStyleSheet(QStringLiteral("background:%1;border:none;").arg(colors[i].name()));
+        header->addWidget(line,0,Qt::AlignVCenter);
+        auto *text=label(names[i]);
+        text->setStyleSheet("font-size:10px;color:#9eb0c8;");
+        header->addWidget(text,0,Qt::AlignVCenter);
+    }
+    cardLayout->addLayout(header);
+    auto *g=new GraphWidget(false);
+    g->setHistoryWindow(7200.0);
+    graphs_<<g;
+    cardLayout->addWidget(g,1);
+    l->addWidget(chartCard,1);
+
+    auto *toolbar=new QHBoxLayout;
+    toolbar->addWidget(label(QStringLiteral("保留最近 2 小时 · 500 ms 采样 · 自动清除过期数据"),"muted"));
     toolbar->addStretch();
-    auto *pause=button(QStringLiteral("暂停"));auto *clear=button(QStringLiteral("清除曲线"));
-    toolbar->addWidget(pause);toolbar->addWidget(clear);l->addLayout(toolbar);
-    auto *g=new GraphWidget(false);g->enableBuiltInLegend();graphs_<<g;
-    l->addWidget(panel(QStringLiteral("实时趋势 · 采样周期 500 ms（演示）/ 实时 CAN 数据"),g),1);
+    auto *pause=button(QStringLiteral("暂停"));
+    auto *clear=button(QStringLiteral("清除曲线"));
+    toolbar->addWidget(pause);
+    toolbar->addWidget(clear);
+    l->addLayout(toolbar);
     connect(pause,&QPushButton::clicked,this,[this,pause]{
         waveformPaused_=!waveformPaused_;
         pause->setText(waveformPaused_?QStringLiteral("继续"):QStringLiteral("暂停"));
@@ -920,10 +956,10 @@ void DashboardWindow::appendSample() {
     if(trends_.size()!=sample.size())trends_=QVector<QVector<double>>(sample.size());
     timestamps_.append(now);
     for(int i=0;i<sample.size();++i)trends_[i].append(sample[i]);
-    // Time-based retention, NOT the old 160-sample limit. Drop all points older
-    // than one hour in all 6 series simultaneously, maintaining aligned indices.
+    // Keep a two-hour common source buffer; overview plots independently show
+    // the most recent hour while the waveform page shows both hours.
     int expired=0;
-    while(expired<timestamps_.size() && timestamps_[expired]<now-3600.0)++expired;
+    while(expired<timestamps_.size() && timestamps_[expired]<now-7200.0)++expired;
     if(expired>0) {
         timestamps_.remove(0,expired);
         for(auto &series:trends_)series.remove(0,expired);
@@ -996,7 +1032,7 @@ void DashboardWindow::refreshUi() {
     updateConnectionText();
     const qint64 nowMs=clock_.elapsed();
     // Expire samples even if reception stops or the waveform is paused.
-    const double cutoff=QDateTime::currentMSecsSinceEpoch()/1000.0-3600.0;
+    const double cutoff=QDateTime::currentMSecsSinceEpoch()/1000.0-7200.0;
     int expired=0;
     while(expired<timestamps_.size() && timestamps_[expired]<cutoff)++expired;
     if(expired>0) {
