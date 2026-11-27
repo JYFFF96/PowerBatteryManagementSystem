@@ -97,6 +97,23 @@ public:
             xAxis->setTickLabelRotation(0);
             xAxis->setRange(QDateTime::currentMSecsSinceEpoch()/1000.0-60,
                             QDateTime::currentMSecsSinceEpoch()/1000.0);
+            // Put the legend in a separate layout row, below the time axis.
+            // This avoids covering the curve and keeps all three panels aligned.
+            axisRect()->insetLayout()->take(legend);
+            plotLayout()->insertRow(1);
+            plotLayout()->addElement(1,0,legend);
+            plotLayout()->setRowSpacing(2);
+            legend->setVisible(true);
+            legend->setBrush(QBrush(QColor("#0b1017")));
+            legend->setBorderPen(Qt::NoPen);
+            legend->setTextColor(QColor("#bacce3"));
+            legend->setFont(QFont(QStringLiteral("Microsoft YaHei"),9));
+            legend->setIconSize(16,8);
+            legend->setIconTextPadding(5);
+            legend->setColumnSpacing(14);
+            legend->setRowSpacing(0);
+            legend->setFillOrder(QCPLayoutGrid::foColumnsFirst);
+            legend->setWrap(1);
         } else {
             auto ticker=QSharedPointer<QCPAxisTickerText>(new QCPAxisTickerText);
             xAxis->setTicker(ticker);
@@ -111,7 +128,8 @@ public:
 
     void setTimeSeries(const QVector<double> &times,
                        const QVector<QVector<double>> &series,
-                       const QVector<QColor> &colors) {
+                       const QVector<QColor> &colors,
+                       const QStringList &names) {
         if (bars_)return;
         if (series.size()!=graphCount() || times.size()<lastCount_) {
             clearGraphs();
@@ -122,6 +140,7 @@ public:
                 g->setPen(QPen(colors.isEmpty()?QColor("#5ab5ff"):colors[i%colors.size()],1.6));
                 g->setAdaptiveSampling(true);
                 g->setLineStyle(QCPGraph::lsLine);
+                g->setName(i<names.size()?names.at(i):QStringLiteral("曲线 %1").arg(i+1));
             }
             lastCount_=0;
             lastKey_=-1;
@@ -817,9 +836,12 @@ void DashboardWindow::updateGraphs() {
             result<<((i<trends_.size())?trends_[i]:QVector<double>{});
         return result;
     };
-    graphs_[0]->setTimeSeries(timestamps_,history({0,1}),{blue,yellow});
-    graphs_[1]->setTimeSeries(timestamps_,history({2,3}),{purple,green});
-    graphs_[2]->setTimeSeries(timestamps_,history({4,5}),{red,blue});
+    graphs_[0]->setTimeSeries(timestamps_,history({0,1}),{blue,yellow},
+        {QStringLiteral("总电压 (V)"),QStringLiteral("电流 (A)")});
+    graphs_[1]->setTimeSeries(timestamps_,history({2,3}),{purple,green},
+        {QStringLiteral("SOC (%)"),QStringLiteral("SOH (%)")});
+    graphs_[2]->setTimeSeries(timestamps_,history({4,5}),{red,blue},
+        {QStringLiteral("最高单体电压 (V)"),QStringLiteral("最低单体电压 (V)")});
     QVector<double> cells,temp;
     const int nCells=data_.hasSummary?data_.cellCount:(demo_?data_.cellCount:0);
     const int nTemps=data_.hasSummary?data_.temperatureCount:(demo_?data_.temperatureCount:0);
@@ -831,7 +853,10 @@ void DashboardWindow::updateGraphs() {
     graphs_[4]->setSeries({temp},{green});
     graphs_[5]->setSeries({cells},{blue});
     graphs_[6]->setSeries({temp},{green});
-    graphs_[7]->setTimeSeries(timestamps_,history({0,1,2,4,5}),{blue,yellow,purple,green,red});
+    graphs_[7]->setTimeSeries(timestamps_,history({0,1,2,4,5}),{blue,yellow,purple,green,red},
+        {QStringLiteral("总电压 (V)"),QStringLiteral("电流 (A)"),
+         QStringLiteral("SOC (%)"),QStringLiteral("最高电压 (V)"),
+         QStringLiteral("最低电压 (V)")});
 }
 void DashboardWindow::updateFaults() {
     const struct {const char *name;int byte;int shift;} fields[]={
