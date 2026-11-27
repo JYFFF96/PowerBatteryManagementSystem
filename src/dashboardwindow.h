@@ -81,6 +81,8 @@ private:
     QVector<QLabel *> overviewValues_;
     QVector<QLabel *> overviewUnits_;
     QVector<QLabel *> overviewNotes_;
+    QLabel *cellBarRemark_ = nullptr;
+    QLabel *tempBarRemark_ = nullptr;
     QVector<QLabel *> cellValues_;
     QVector<QLabel *> faultCounts_;
     QVector<QLabel *> recordingValues_;
