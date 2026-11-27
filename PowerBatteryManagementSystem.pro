@@ -18,7 +18,7 @@ HEADERS += \
     src/canadapter.h \
     thirdparty/qcustomplot/qcustomplot.h
 
-INCLUDEPATH += $PWD/src $PWD/thirdparty/qcustomplot
+INCLUDEPATH += src thirdparty/qcustomplot
 
 win32 {
     CONFIG(debug, debug|release) {
