@@ -132,6 +132,8 @@ public:
     }
 
     void setDualAxis(bool dual) { dualAxis_=dual; }
+    // A value label is displayed below every bar instead of every other index.
+    void setBarValueDecimals(int decimals) { barValueDecimals_=decimals; }
 
     void setTimeSeries(const QVector<double> &times,
                        const QVector<QVector<double>> &series,
@@ -232,15 +234,24 @@ public:
         if(minIndex>=0)yAxis->setRange(minValue-margin,maxValue+margin);
         else yAxis->setRange(0,1);
         auto ticker=QSharedPointer<QCPAxisTickerText>(new QCPAxisTickerText);
-        for(int i=0;i<values.size();++i)if((values.size()<=24 && i%2==0)
-              ||(values.size()>24 && i%qMax(1,values.size()/12)==0))
-            ticker->addTick(i+1,QString::number(i+1));
+        for(int i=0;i<values.size();++i) {
+            const double value=values[i];
+            const QString text=(std::isfinite(value) && value>-500)
+                ?QString::number(value,'f',barValueDecimals_)
+                :QStringLiteral("--");
+            ticker->addTick(i+1,text);
+        }
         xAxis->setTicker(ticker);
+        QFont tickFont=xAxis->tickLabelFont();
+        tickFont.setPointSize(8);
+        xAxis->setTickLabelFont(tickFont);
+        xAxis->setTickLabelRotation(50);
         replot(QCustomPlot::rpQueuedReplot);
     }
 private:
     bool bars_;
     bool dualAxis_ = false;
+    int barValueDecimals_=2;
     QVector<QCPBars*> barsSeries_;
     int lastCount_=0;
     double lastKey_=-1;
@@ -488,10 +499,42 @@ QWidget *DashboardWindow::createOverview() {
     }
     l->addLayout(charts,2);
     auto *bottom=new QHBoxLayout;
-    auto *vg=new GraphWidget(true);graphs_<<vg;
-    auto *tg=new GraphWidget(true);graphs_<<tg;
-    bottom->addWidget(panel(QStringLiteral("单体电压分布 · 24节"),vg),3);
-    bottom->addWidget(panel(QStringLiteral("温度分布 · 最多64路"),tg),2);
+    bottom->setSpacing(12);
+    const QStringList barTitles={QStringLiteral("单体电压分布 · 24节"),
+                                 QStringLiteral("温度分布 · 24路")};
+    for(int i=0;i<2;++i) {
+        auto *card=new QFrame;
+        card->setObjectName("panel");
+        auto *cardLayout=vertical(card,10);
+        cardLayout->setSpacing(6);
+        auto *header=new QHBoxLayout;
+        header->setSpacing(6);
+        header->addWidget(label(barTitles[i],"sectionTitle"));
+        header->addStretch();
+        const QStringList legends={QStringLiteral("最低"),QStringLiteral("最高"),QStringLiteral("正常")};
+        const QColor colors[]={purple,red,blue};
+        for(int j=0;j<3;++j) {
+            auto *swatch=new QFrame;
+            swatch->setFixedSize(11,3);
+            swatch->setStyleSheet(QStringLiteral("background:%1;border:none;").arg(colors[j].name()));
+            header->addWidget(swatch,0,Qt::AlignVCenter);
+            auto *legendLabel=label(legends[j]);
+            legendLabel->setStyleSheet("font-size:10px;color:#9eb0c8;");
+            header->addWidget(legendLabel,0,Qt::AlignVCenter);
+        }
+        auto *remark=label(i==0
+            ?QStringLiteral("过压 3.65V · 欠压 2.75V")
+            :QStringLiteral("仅显示前24路"));
+        remark->setStyleSheet("font-size:10px;color:#71839c;");
+        header->addSpacing(6);
+        header->addWidget(remark,0,Qt::AlignVCenter);
+        cardLayout->addLayout(header);
+        auto *g=new GraphWidget(true);
+        g->setBarValueDecimals(i==0?2:0);
+        graphs_<<g;
+        cardLayout->addWidget(g,1);
+        bottom->addWidget(card,1);
+    }
     l->addLayout(bottom,3);
     return page(w);
 }
@@ -661,8 +704,8 @@ QWidget *DashboardWindow::createSettings() {
     left->addWidget(panel(QStringLiteral("本地提示阈值（非 BMS 保护参数）"),threshold));
 
     auto *battery=new QWidget;auto *bf=new QFormLayout(battery);
-    cellCount_=new QSpinBox;cellCount_->setRange(1,192);cellCount_->setValue(24);
-    tempCount_=new QSpinBox;tempCount_->setRange(1,64);tempCount_->setValue(4);
+    cellCount_=new QSpinBox;cellCount_->setRange(24,24);cellCount_->setValue(24);cellCount_->setEnabled(false);
+    tempCount_=new QSpinBox;tempCount_->setRange(24,24);tempCount_->setValue(24);tempCount_->setEnabled(false);
     bf->addRow(QStringLiteral("模拟单体数量"),cellCount_);
     bf->addRow(QStringLiteral("模拟温感数量"),tempCount_);
     right->addWidget(panel(QStringLiteral("电池参数（仅模拟模式）"),battery));
@@ -685,7 +728,7 @@ QWidget *DashboardWindow::createSettings() {
         highTemperature_->setValue(defaults?55:s.value("highTemperature",55).toDouble());
         lowTemperature_->setValue(defaults?-30:s.value("lowTemperature",-30).toDouble());
         cellCount_->setValue(defaults?24:s.value("cells",24).toInt());
-        tempCount_->setValue(defaults?4:s.value("temps",4).toInt());
+        tempCount_->setValue(defaults?24:s.value("temps",24).toInt());
         recordLimit_->setValue(defaults?5000:s.value("recordLimit",5000).toInt());
         maxFrames_=recordLimit_->value();
     };
@@ -900,17 +943,19 @@ void DashboardWindow::updateGraphs() {
         {QStringLiteral("SOC (%)"),QStringLiteral("SOH (%)")});
     graphs_[2]->setTimeSeries(timestamps_,history({4,5}),{red,blue},
         {QStringLiteral("最高单体电压 (V)"),QStringLiteral("最低单体电压 (V)")});
-    QVector<double> cells,temp;
-    const int nCells=data_.hasSummary?data_.cellCount:(demo_?data_.cellCount:0);
-    const int nTemps=data_.hasSummary?data_.temperatureCount:(demo_?data_.temperatureCount:0);
-    QVector<double> overviewCells(24,-999.0);
-    for(int i=0;i<qMin(24,nCells);++i)overviewCells[i]=data_.cells[i];
-    for(int i=0;i<nCells;++i)cells<<data_.cells[i];
-    for(int i=0;i<nTemps;++i)temp<<(data_.temperatures[i]==-999?-999.0:double(data_.temperatures[i]));
-    graphs_[3]->setSeries({overviewCells},{blue});
-    graphs_[4]->setSeries({temp},{green});
+    QVector<double> cells(24,-999.0),temp(24,-999.0);
+    // Fixed 24 positions on both charts; never create fake values for missing CAN data.
+    for(int i=0;i<24;++i) {
+        if(data_.hasSummary && i<data_.cellCount)
+            cells[i]=data_.cells[i];
+        if(data_.hasSummary && i<data_.temperatureCount &&
+           data_.temperatures[i]!=-999)
+            temp[i]=double(data_.temperatures[i]);
+    }
+    graphs_[3]->setSeries({cells},{blue});
+    graphs_[4]->setSeries({temp},{blue});
     graphs_[5]->setSeries({cells},{blue});
-    graphs_[6]->setSeries({temp},{green});
+    graphs_[6]->setSeries({temp},{blue});
     graphs_[7]->setTimeSeries(timestamps_,history({0,1,2,4,5}),{blue,yellow,purple,green,red},
         {QStringLiteral("总电压 (V)"),QStringLiteral("电流 (A)"),
          QStringLiteral("SOC (%)"),QStringLiteral("最高电压 (V)"),
@@ -973,10 +1018,10 @@ void DashboardWindow::refreshUi() {
     if(overviewValues_.size()!=6 || overviewNotes_.size()!=6 || overviewUnits_.size()!=6)return;
     if(!displayDirty_ && !demo_ && !graphsDirty_)return;
     displayDirty_=false;
-    const int numCells=data_.hasSummary?data_.cellCount:0;
-    const int numTemps=data_.hasSummary?data_.temperatureCount:0;
+    const int numCells=24;
+    const int numTemps=24;
     double sum=0;int count=0;
-    for(int i=0;i<numCells;++i)if(data_.cells[i]>=0) {
+    for(int i=0;i<numCells;++i)if(data_.hasSummary && i<data_.cellCount && data_.cells[i]>=0) {
         sum+=data_.cells[i];++count;
     }
     const double avg=count?sum/count:0;
@@ -1051,7 +1096,7 @@ void DashboardWindow::refreshUi() {
     for(int i=0;i<cellValues_.size();++i)cellValues_[i]->setText(cv[i]);
     if(cellTable_&&cellTable_->rowCount()!=numCells)cellTable_->setRowCount(numCells);
     for(int i=0;i<numCells;++i){
-        double v=data_.cells[i];bool valid=v>=0;
+        double v=data_.cells[i];bool valid=data_.hasSummary && i<data_.cellCount && v>=0;
         bool alarm=valid&&(v*1000>highVoltage_->value()||v*1000<lowVoltage_->value());
         QStringList row={QString("#%1").arg(i+1,3,10,QChar('0')),
             valid?n(v,3):QStringLiteral("--"),
@@ -1063,7 +1108,7 @@ void DashboardWindow::refreshUi() {
         }
     }
     double tempSum=0;int tempSamples=0,maxT=-999,minT=999;
-    for(int i=0;i<numTemps;++i)if(data_.temperatures[i]!=-999) {
+    for(int i=0;i<numTemps;++i)if(data_.hasSummary && i<data_.temperatureCount && data_.temperatures[i]!=-999) {
         int t=data_.temperatures[i];tempSum+=t;++tempSamples;maxT=qMax(maxT,t);minT=qMin(minT,t);
     }
     const double tempAvg=tempSamples?tempSum/tempSamples:0;
@@ -1076,7 +1121,7 @@ void DashboardWindow::refreshUi() {
     for(int i=0;i<temperatureValues_.size();++i)temperatureValues_[i]->setText(tv[i]);
     if(temperatureTable_&&temperatureTable_->rowCount()!=numTemps)temperatureTable_->setRowCount(numTemps);
     for(int i=0;i<numTemps;++i) {
-        int t=data_.temperatures[i];bool valid=t!=-999;
+        int t=data_.temperatures[i];bool valid=data_.hasSummary && i<data_.temperatureCount && t!=-999;
         bool alarm=valid&&(t>highTemperature_->value()||t<lowTemperature_->value());
         QStringList row={QString("#%1").arg(i+1,2,10,QChar('0')),
             valid?QString::number(t):QStringLiteral("--"),
