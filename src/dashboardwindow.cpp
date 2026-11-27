@@ -481,7 +481,7 @@ QWidget *DashboardWindow::createOverview() {
         }
         cardLayout->addLayout(header);
         auto *g=new GraphWidget(false);
-        g->setDualAxis(i==0);
+        g->setDualAxis(false); // All realtime charts share a single left Y axis
         graphs_<<g;
         cardLayout->addWidget(g,1);
         charts->addWidget(card,1);
